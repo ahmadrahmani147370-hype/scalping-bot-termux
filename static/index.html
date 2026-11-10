@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<title>Scalping Signals</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+:root{--bg:#0b0f1a;--panel:#121826;--line:#1d2a3d;--cyan:#13c8f0;--txt:#e8edf5;--mut:#8592a6;--green:#22c55e;--red:#ef4444;--amber:#f59e0b;--grey:#94a3b8}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--txt);font:14px/1.35 -apple-system,Segoe UI,Roboto,Inter,sans-serif}
+.top{display:flex;align-items:center;gap:6px;padding:10px;border-bottom:1px solid #0e4a5c;background:#0d1220}
+.tab{display:flex;align-items:center;gap:6px;padding:9px 12px;border-radius:9px;color:var(--txt);background:none;border:0;font-weight:500;font-size:13px;cursor:pointer}
+.tab.on{background:var(--cyan);color:#04202a;font-weight:600}.sp{flex:1}
+.gear{background:none;border:0;color:var(--txt);display:flex;gap:5px;align-items:center;font-size:13px;cursor:pointer;padding:8px}
+.row2{display:flex;gap:8px;padding:12px 10px 4px;align-items:center;flex-wrap:wrap}
+.pill{padding:7px 13px;border-radius:999px;border:0;background:#1a2130;color:#cfd6e2;font-weight:600;font-size:12.5px;cursor:pointer}
+.pill.on{background:var(--cyan);color:#04202a}
+.seg{margin-left:auto;display:flex;background:#141b2a;border:1px solid var(--line);border-radius:10px;padding:3px}
+.seg button{border:0;background:none;color:var(--mut);padding:5px 11px;border-radius:7px;font-weight:600;font-size:12.5px;cursor:pointer}
+.seg button.on{background:#0e3a48;color:var(--cyan)}
+.card{margin:10px;border:1px solid #11708a;border-radius:14px;background:var(--panel);overflow:hidden}
+.ch{display:flex;gap:12px;align-items:center;padding:14px}
+.ch h2{margin:0;font:600 15px ui-monospace,Menlo,monospace;letter-spacing:.2px}.ch p{margin:2px 0 0;color:var(--mut);font-size:11.5px}
+table{width:100%;border-collapse:collapse}
+th{font-size:10.5px;color:var(--mut);text-align:left;font-weight:600;letter-spacing:.6px;padding:9px 6px;border-top:1px solid #11708a;border-bottom:1px solid #11708a}
+th.r,td.r{text-align:right}th.c,td.c{text-align:center}
+td{padding:11px 6px;border-bottom:1px solid #11506a;vertical-align:middle}
+tr.det td{padding:0 10px 12px;border-bottom:1px solid #11506a}
+.asset{display:flex;gap:8px;align-items:center}.ai{width:14px;font-weight:700;font-size:12px;text-align:center}
+.sym{font-weight:600}.nm{color:var(--mut);font-size:11px}
+.sig{font-weight:700;font-size:12.5px;display:flex;align-items:center;gap:4px;white-space:nowrap}
+.BUY{color:var(--green)}.SELL{color:var(--red)}.HOLD{color:var(--amber)}
+.strong{display:inline-block;margin-top:3px;font-size:9.5px;padding:1px 5px;border-radius:5px;background:#0e3a48;color:var(--cyan);font-weight:700}
+.cf{display:flex;align-items:center;gap:6px}.bar{width:38px;height:5px;border-radius:3px;background:#2a3344;overflow:hidden}
+.bar i{display:block;height:100%;border-radius:3px}.pct{font-weight:600;font-size:12.5px}
+.px{font-weight:700;font-size:13.5px}.chg{font-size:11px}.up{color:var(--green)}.dn{color:var(--red)}
+.ex{border:0;border-radius:999px;padding:7px 12px;font-weight:700;font-size:12px;color:#fff;cursor:pointer;white-space:nowrap}
+.ex.BUY{background:var(--green);color:#fff}.ex.SELL{background:var(--red);color:#fff}.exh{color:#6b778a;font-weight:600;font-size:12px}
+.lv{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin:4px 0 8px}.lv div{background:#0f1522;border:1px solid var(--line);border-radius:8px;padding:6px}
+.lv b{display:block;font-size:12.5px}.lv span{font-size:10px;color:var(--mut)}
+.ind{display:flex;flex-wrap:wrap;gap:5px}.ind span{font-size:10.5px;padding:3px 6px;border-radius:6px;background:#0f1522;border:1px solid var(--line)}
+.foot{display:flex;justify-content:space-between;padding:10px 12px;color:var(--mut);font-size:11px}.dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--green);margin-right:5px}
+.hide{display:none}.msg{padding:30px 16px;text-align:center;color:var(--mut)}
+.list .it{display:flex;justify-content:space-between;padding:10px 14px;border-top:1px solid var(--line);font-size:12.5px}.list .it small{color:var(--mut)}
+.form{padding:6px 14px 14px}.form label{display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid var(--line);font-size:13px}
+.form input[type=number]{width:90px;background:#0f1522;border:1px solid var(--line);color:var(--txt);border-radius:7px;padding:6px;text-align:right}
+.btn{margin-top:12px;width:100%;padding:11px;border-radius:10px;border:0;background:var(--cyan);color:#04202a;font-weight:700;font-size:14px;cursor:pointer}
+.kv{font-size:12px;color:var(--mut);padding:0 14px 12px}.kv b{color:var(--txt)}
+.sw{position:relative;width:44px;height:24px}.sw input{opacity:0;width:0;height:0}.sw i{position:absolute;inset:0;background:#2a3344;border-radius:99px;transition:.2s}
+.sw i:before{content:"";position:absolute;left:3px;top:3px;width:18px;height:18px;border-radius:50%;background:#fff;transition:.2s}.sw input:checked+i{background:var(--cyan)}.sw input:checked+i:before{transform:translateX(20px)}
+.warn{margin:0 14px 12px;padding:10px;border-radius:9px;background:#2a1d0b;color:#fbbf24;font-size:12px}
+</style></head><body>
+<div class="top">
+  <button class="tab on" id="tLive" onclick="view('live')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>Live Signals</button>
+  <button class="tab" id="tHist" onclick="view('hist')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l3 2"/></svg>Signals History</button>
+  <div class="sp"></div>
+  <button class="gear" onclick="view('set')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>Settings</button>
+</div>
+
+<div id="vLive">
+  <div class="row2">
+    <button class="pill on" id="pMan" onclick="mode('man')">Manual Trade</button>
+    <button class="pill" id="pAuto" onclick="mode('auto')">Auto Trade</button>
+    <div class="seg" id="seg"><button data-tf="1m">1m</button><button data-tf="5m">5m</button><button data-tf="15m">15m</button></div>
+  </div>
+  <div class="card hide" id="autoCard">
+    <div class="ch"><div style="flex:1"><h2>Auto Trade</h2><p id="autoInfo">Loading…</p></div>
+      <label class="sw"><input type="checkbox" id="autoSw" onchange="toggleAuto(this)"><i></i></label></div>
+    <div id="keyWarn"></div><div class="list" id="posList"></div>
+  </div>
+  <div class="card">
+    <div class="ch"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#13c8f0" stroke-width="2"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>
+      <div><h2>Signals · All Assets <span id="tfLbl" style="color:var(--cyan)"></span></h2><p>Indicator analysis for all 10 supported cryptos · tap a row for entry / TP / SL</p></div></div>
+    <table><thead><tr><th style="padding-left:12px">ASSET</th><th>SIGNAL</th><th>CONFIDENCE</th><th class="r">PRICE</th><th class="c">EXECUTE</th></tr></thead>
+      <tbody id="rows"><tr><td colspan="5" class="msg">Loading signals…</td></tr></tbody></table>
+    <div class="foot"><span>✧ Powered by Indicator analysis</span><span><span class="dot"></span><span id="upd">Live updates every 12s</span></span></div>
+  </div>
+</div>
+
+<div id="vHist" class="hide">
+  <div class="card"><div class="ch"><div><h2>Signals History</h2><p>New BUY/SELL signals across 1m / 5m / 15m</p></div></div><div class="list" id="hSig"></div></div>
+  <div class="card"><div class="ch"><div><h2>Trade History</h2><p>Manual and auto trades</p></div></div><div class="list" id="hTr"></div></div>
+</div>
+
+<div id="vSet" class="hide"><div class="card">
+  <div class="ch"><div><h2>Settings</h2><p>Risk controls apply to manual and auto trades</p></div></div>
+  <div class="form">
+    <label>Auto Trade timeframe <div class="seg" id="segS"><button data-tf="1m">1m</button><button data-tf="5m">5m</button><button data-tf="15m">15m</button></div></label>
+    <label>Order size (USDT)<input type="number" id="sOrder" min="5" step="1"></label>
+    <label>Max open positions<input type="number" id="sMax" min="1" max="10"></label>
+    <label>Daily loss limit (USDT)<input type="number" id="sLoss" min="0.5" step="0.5"></label>
+    <label>Auto min confidence (%)<input type="number" id="sConf" min="50" max="100"></label>
+    <label>Stop-loss (× ATR)<input type="number" id="sSl" min="0.3" step="0.1"></label>
+    <label>Take-profit (× ATR)<input type="number" id="sTp" min="0.3" step="0.1"></label>
+    <label>Telegram alerts<label class="sw" style="border:0;padding:0"><input type="checkbox" id="sAl"><i></i></label></label>
+    <label>Alert threshold (%)<input type="number" id="sAlT" min="50" max="100"></label>
+    <button class="btn" onclick="saveSet()">Save settings</button>
+  </div><div class="kv" id="keyInfo"></div>
+</div></div>
+
+<script>
+const tg = window.Telegram && Telegram.WebApp; if (tg) { tg.ready(); tg.expand(); try{tg.setHeaderColor('#0d1220');tg.setBackgroundColor('#0b0f1a')}catch(e){} }
+const INIT = (tg && tg.initData) || (new URLSearchParams(location.search).get('test') === '1' ? 'test-bypass' : '');
+let TF = localStorage.getItem('tf') || '5m', SET = null, SSTF = '5m', DATA = [], OPEN = {};
+const COL = {BTC:'#f7931a',ETH:'#627eea',BNB:'#f3ba2f',SOL:'#a855f7',XRP:'#cbd5e1',ADA:'#3b82f6',DOGE:'#c2a633',AVAX:'#e84142',LINK:'#2a5ada',TRX:'#ef4444'};
+async function api(p, opt={}) {
+  const r = await fetch(p, {...opt, headers: {'Content-Type':'application/json','X-Telegram-Init-Data': INIT}});
+  const j = await r.json().catch(()=>({})); if (!r.ok) throw new Error(j.detail || ('HTTP '+r.status)); return j;
+}
+function alertMsg(m){ tg && tg.showAlert ? tg.showAlert(m) : alert(m) }
+function confirmMsg(m){ return new Promise(res => tg && tg.showConfirm && tg.initData ? tg.showConfirm(m, res) : res(confirm(m))) }
+function view(v){ for (const [id,t] of [['vLive','tLive'],['vHist','tHist'],['vSet',null]]) { document.getElementById(id).classList.toggle('hide', id !== {live:'vLive',hist:'vHist',set:'vSet'}[v]); if(t) document.getElementById(t).classList.toggle('on', id==={live:'vLive',hist:'vHist'}[v]); }
+  if (v==='hist') loadHist(); if (v==='set') loadSet(); }
+function mode(m){ pMan.classList.toggle('on', m==='man'); pAuto.classList.toggle('on', m==='auto'); autoCard.classList.toggle('hide', m!=='auto'); if (m==='auto') loadSet(); }
+function segInit(el, cur, cb){ el.querySelectorAll('button').forEach(b=>{ b.classList.toggle('on', b.dataset.tf===cur); b.onclick=()=>{ el.querySelectorAll('button').forEach(x=>x.classList.remove('on')); b.classList.add('on'); cb(b.dataset.tf) } }) }
+segInit(seg, TF, tf => { TF = tf; localStorage.setItem('tf', tf); load() });
+const ic = {BUY:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="M8 12l4-4 4 4M12 8v8"/></svg>',
+ SELL:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="M8 12l4 4 4-4M12 8v8"/></svg>',
+ HOLD:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="M8 12h8"/></svg>'};
+function render(){
+  tfLbl.textContent = '· ' + TF;
+  rows.innerHTML = DATA.map(s => {
+    const barC = s.confidence >= 60 ? '#f59e0b' : s.confidence >= 50 ? '#f59e0b' : '#94a3b8';
+    const ch = s.change24h == null ? '' : `<div class="chg ${s.change24h>=0?'up':'dn'}">${s.change24h>=0?'↗ +':'↘ '}${s.change24h.toFixed(2)}%</div>`;
+    const ex = s.signal==='HOLD' ? '<span class="exh">HOLD</span>' : `<button class="ex ${s.signal}" onclick="event.stopPropagation();trade('${s.symbol}','${s.signal}')">${s.signal==='BUY'?'↗':'↘'} ${s.signal}</button>`;
+    const det = OPEN[s.symbol] ? `<tr class="det"><td colspan="5"><div class="lv"><div><span>Entry</span><b>${s.entry}</b></div><div><span>Take-profit</span><b class="up">${s.tp}</b></div><div><span>Stop-loss</span><b class="dn">${s.sl}</b></div></div>
+      <div class="ind">${s.indicators.map(i=>`<span class="${i.vote>0?'up':i.vote<0?'dn':''}">${i.name}: ${i.detail}</span>`).join('')}<span>1m ${s.others['1m']} · 5m ${s.others['5m']} · 15m ${s.others['15m']}</span></div></td></tr>` : '';
+    return `<tr onclick="OPEN['${s.symbol}']=!OPEN['${s.symbol}'];render()"><td style="padding-left:12px"><div class="asset"><span class="ai" style="color:${COL[s.symbol]}">${s.symbol[0]}</span><div><div class="sym">${s.symbol}</div><div class="nm">${s.name}</div></div></div></td>
+      <td><div class="sig ${s.signal}">${ic[s.signal]} ${s.signal}</div>${s.strong?'<span class="strong">⚡ STRONG</span>':''}</td>
+      <td><div class="cf"><div class="bar"><i style="width:${s.confidence}%;background:${barC}"></i></div><span class="pct">${s.confidence}%</span></div></td>
+      <td class="r"><div class="px">$${Number(s.price).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:8})}</div>${ch}</td><td class="c">${ex}</td></tr>${det}`;
+  }).join('');
+}
+async function load(){
+  if (!INIT) { rows.innerHTML = '<tr><td colspan="5" class="msg">Please open this app from the Telegram bot.</td></tr>'; return }
+  try { const j = await api('/api/signals?tf='+TF); DATA = j.signals; render();
+    upd.textContent = 'Updated ' + new Date(j.updated*1000).toLocaleTimeString() + ' · every ' + j.refresh_sec + 's';
+  } catch(e) { rows.innerHTML = `<tr><td colspan="5" class="msg">${e.message}</td></tr>` }
+}
+async function trade(sym, side){
+  const s = DATA.find(x=>x.symbol===sym); const size = SET ? SET.order_size_usdt : 10;
+  const txt = side==='BUY' ? `BUY ${sym}/USDT with ${size} USDT at market?\nTP ${s.tp} · SL ${s.sl} (OCO)` : `SELL ${sym}/USDT at market (closes position / sells free ${sym})?`;
+  if (!(await confirmMsg(txt))) return;
+  try { const r = await api('/api/trade', {method:'POST', body: JSON.stringify({symbol:sym, side, confirm:true})}); alertMsg(r.ok ? '✅ '+r.msg : '❌ '+r.error) } catch(e){ alertMsg('❌ '+e.message) }
+}
+const fmtT = t => new Date(t*1000).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
+async function loadHist(){
+  try { const j = await api('/api/history');
+    hSig.innerHTML = j.signals.map(s=>`<div class="it"><div><b class="${s.signal}">${s.signal}</b> ${s.symbol} <small>${s.tf}${s.strong?' ⚡':''} · ${s.confidence}%</small><br><small>E ${(+s.entry).toPrecision(6)} · TP ${(+s.tp).toPrecision(6)} · SL ${(+s.sl).toPrecision(6)}</small></div><small>${fmtT(s.ts)}</small></div>`).join('') || '<div class="msg">No signals recorded yet.</div>';
+    hTr.innerHTML = j.trades.map(t=>`<div class="it"><div><b class="${t.side}">${t.side}</b> ${t.symbol} <small>${t.mode} · ${t.status}</small><br><small>${t.price?('@ '+(+t.price).toPrecision(6)):''} ${t.pnl!=null?('PnL '+t.pnl.toFixed(3)):''} ${t.error||''}</small></div><small>${fmtT(t.ts)}</small></div>`).join('') || '<div class="msg">No trades yet.</div>';
+  } catch(e){ hSig.innerHTML = `<div class="msg">${e.message}</div>` }
+}
+async function loadSet(){
+  try { const j = await api('/api/settings'); SET = j.settings; SSTF = SET.timeframe;
+    segInit(segS, SSTF, tf => SSTF = tf);
+    sOrder.value = SET.order_size_usdt; sMax.value = SET.max_open_positions; sLoss.value = SET.daily_loss_limit_usdt; sConf.value = SET.auto_min_confidence;
+    sSl.value = SET.atr_sl_mult; sTp.value = SET.atr_tp_mult; sAl.checked = SET.alerts; sAlT.value = SET.alert_threshold;
+    autoSw.checked = SET.auto_trade; const k = j.key;
+    autoInfo.textContent = `${SET.auto_trade?'ON':'OFF'} · ${SET.timeframe} · ${SET.order_size_usdt} USDT/trade · min conf ${SET.auto_min_confidence}% · today PnL ${j.today_pnl.toFixed(2)} USDT`;
+    keyWarn.innerHTML = k.order_test_ok ? '' : '<div class="warn">⚠️ Your Binance API key has no Spot trading permission, so orders will be rejected. Enable "Spot & Margin Trading" on the key (keep withdrawals OFF).</div>';
+    posList.innerHTML = j.open_positions.map(p=>`<div class="it"><div><b class="BUY">OPEN</b> ${p.symbol} <small>${p.qty} @ ${(+p.price).toPrecision(6)}</small></div><small>TP ${(+p.tp).toPrecision(6)} / SL ${(+p.sl).toPrecision(6)}</small></div>`).join('') || '<div class="it"><small>No open positions</small></div>';
+    keyInfo.innerHTML = `Binance key — read: <b>${k.account_ok?'OK':'FAIL'}</b> · spot trading: <b>${k.spot_trading_enabled?'ENABLED':'DISABLED'}</b> · withdrawals: <b>${k.withdrawals_enabled?'ENABLED ⚠️':'disabled'}</b> · IP restricted: <b>${k.ip_restricted?'yes':'no'}</b>`;
+  } catch(e){ autoInfo.textContent = e.message }
+}
+async function saveSet(){
+  try { await api('/api/settings', {method:'POST', body: JSON.stringify({timeframe:SSTF, order_size_usdt:+sOrder.value, max_open_positions:+sMax.value, daily_loss_limit_usdt:+sLoss.value,
+    auto_min_confidence:+sConf.value, atr_sl_mult:+sSl.value, atr_tp_mult:+sTp.value, alerts:sAl.checked, alert_threshold:+sAlT.value})}); alertMsg('Settings saved'); loadSet() } catch(e){ alertMsg('❌ '+e.message) }
+}
+async function toggleAuto(el){
+  const on = el.checked;
+  if (on && !(await confirmMsg(`Enable Auto Trade on ${SET?SET.timeframe:''}? The bot will place real market orders (${SET?SET.order_size_usdt:10} USDT each) with TP/SL.`))) { el.checked = false; return }
+  try { await api('/api/settings', {method:'POST', body: JSON.stringify({auto_trade:on})}); loadSet() } catch(e){ el.checked = !on; alertMsg('❌ '+e.message) }
+}
+load(); loadSet(); setInterval(load, 12000);
+</script></body></html>

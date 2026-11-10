@@ -50,7 +50,12 @@ SPOT_PUBLIC = ["https://data-api.binance.vision", "https://api.binance.com"]
 PRIVATE_HOSTS = ["https://api.binance.com", "https://api1.binance.com", "https://api2.binance.com", "https://api3.binance.com"]
 DEFAULT_SETTINGS = {"timeframe": "5m", "market": "futures", "leverage": 3, "order_size_usdt": 10.0, "max_open_positions": 3,
                     "daily_loss_limit_usdt": 5.0, "auto_min_confidence": 85, "alerts": True, "alert_threshold": 80,
-                    "auto_trade": False, "atr_sl_mult": 1.0, "atr_tp_mult": 1.5}
+                    "auto_trade": False, "atr_sl_mult": 1.0, "atr_tp_mult": 1.5,
+                    "alerts_fav_only": False, "alert_cooldown_min": 15, "max_alerts_per_min": 10,
+                    "max_trades_per_day": 20, "trailing": True, "be_trigger_atr": 0.5, "trail_atr": 1.0,
+                    "liq_filter": True, "max_funding_pct": 0.1, "min_qv_musd": 20.0}
+PAPER_EXPIRE = 60                          # paper signals expire after 60 candles of their timeframe
+TF_SEC = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600}
 MAX_LEVERAGE = 10
 
 # ---------------- DB ----------------
@@ -67,8 +72,12 @@ def init_db():
             qty REAL, price REAL, quote REAL, tp REAL, sl REAL, status TEXT, order_id TEXT, oco_id TEXT,
             exit_price REAL, pnl REAL, closed_ts REAL, error TEXT);
         """)
+        c.execute("""CREATE TABLE IF NOT EXISTS paper(id INTEGER PRIMARY KEY, ts REAL, symbol TEXT, tf TEXT, side TEXT,
+            confidence INTEGER, entry REAL, tp REAL, sl REAL, status TEXT DEFAULT 'OPEN', closed_ts REAL, exit REAL, last_ot REAL)""")
+        c.execute("CREATE INDEX IF NOT EXISTS paper_status ON paper(status)")
         cols = {r[1] for r in c.execute("PRAGMA table_info(trades)")}
-        for col, typ in (("market", "TEXT"), ("leverage", "INTEGER"), ("tp_algo", "TEXT"), ("sl_algo", "TEXT")):
+        for col, typ in (("market", "TEXT"), ("leverage", "INTEGER"), ("tp_algo", "TEXT"), ("sl_algo", "TEXT"),
+                         ("atr", "REAL"), ("be_done", "INTEGER"), ("sl_moved_ts", "REAL")):
             if col not in cols: c.execute(f"ALTER TABLE trades ADD COLUMN {col} {typ}")
 
 def kv_get(k, default=None):
@@ -104,6 +113,10 @@ def save_settings(upd):
     s["auto_min_confidence"] = max(HOT, min(s["auto_min_confidence"], 99))
     s["alert_threshold"] = max(HOT, min(s["alert_threshold"], 99))
     s["atr_sl_mult"] = max(0.3, min(s["atr_sl_mult"], 5)); s["atr_tp_mult"] = max(0.3, min(s["atr_tp_mult"], 10))
+    s["alert_cooldown_min"] = max(1, min(s["alert_cooldown_min"], 240)); s["max_alerts_per_min"] = max(1, min(s["max_alerts_per_min"], 30))
+    s["max_trades_per_day"] = max(1, min(s["max_trades_per_day"], 200))
+    s["be_trigger_atr"] = max(0.1, min(s["be_trigger_atr"], 5)); s["trail_atr"] = max(0.2, min(s["trail_atr"], 5))
+    s["max_funding_pct"] = max(0.01, min(s["max_funding_pct"], 2)); s["min_qv_musd"] = max(0, min(s["min_qv_musd"], 10000))
     kv_set("settings", s); return s
 
 # ---------------- indicators ----------------
@@ -154,7 +167,7 @@ def candle_patterns(o, h, l, c, e21):
 
 def analyze_tf(k, tf):
     """k = (o,h,l,c,v) lists. Returns indicator votes and a trend score for higher-TF use."""
-    o, h, l, c, v = k
+    o, h, l, c, v = k[:5]
     price = c[-1]
     e9, e21, e50 = ema(c, 9), ema(c, 21), ema(c, 50)
     comps = []  # (name, vote -1..1, weight, is_event, detail)
@@ -229,7 +242,7 @@ def combine(raw, tf, s):
     tpd = max(s["atr_tp_mult"] * at, price * 0.0025); sld = max(s["atr_sl_mult"] * at, price * 0.0015)
     if direction == "SHORT": tp, sl = price - tpd, price + sld
     else: tp, sl = price + tpd, price - sld
-    return {"signal": direction, "confidence": conf, "score": round(score, 3), "price": price, "entry": price, "tp": tp, "sl": sl,
+    return {"signal": direction, "confidence": conf, "score": round(score, 3), "price": price, "entry": price, "tp": tp, "sl": sl, "atr": at,
             "atr_pct": round(a["atr_pct"] * 100, 3), "rsi": round(a["rsi"], 1), "notes": notes, "patterns": a["patterns"],
             "indicators": [{"name": n, "vote": vt, "weight": w, "detail": dt} for n, vt, w, _, dt in comps],
             "htf": {t: round(raw[t]["trend"], 2) for t in HTF[tf] if t in raw}}
@@ -238,7 +251,8 @@ def combine(raw, tf, s):
 STATE = {"signals": {}, "raw": {}, "tickers": {}, "updated": 0, "errors": [], "key_check": None, "webapp_url": None,
          "bot_username": None, "last_poll": 0, "poll_ok": False, "last_alert": {}, "hot_prev": {},
          "source": None, "universe": [], "info": {}, "universe_ts": 0, "weight": 0, "weight_min": 0, "backoff_until": 0,
-         "scan": {}, "fetch_errors": 0, "rate_limit_hits": 0, "requests": 0, "spot_filters": {}}
+         "scan": {}, "fetch_errors": 0, "rate_limit_hits": 0, "requests": 0, "spot_filters": {}, "funding": {},
+         "funding_ts": 0, "alert_times": []}
 KL = {}
 client: httpx.AsyncClient = None
 SEM = asyncio.Semaphore(int(os.environ.get("FETCH_CONCURRENCY", "20")))
@@ -333,7 +347,7 @@ async def fetch_tf(tf):
                 kl = await md_get("klines", {"symbol": sym, "interval": tf, "limit": KLINES})
                 if len(kl) >= 60:
                     KL[(sym, tf)] = ([float(x[1]) for x in kl], [float(x[2]) for x in kl], [float(x[3]) for x in kl],
-                                     [float(x[4]) for x in kl], [float(x[5]) for x in kl])
+                                     [float(x[4]) for x in kl], [float(x[5]) for x in kl], [x[0] / 1000 for x in kl])
             except Exception as e:
                 errs += 1
                 if errs <= 3: add_err(f"klines {sym} {tf}: {e}")
@@ -356,12 +370,24 @@ def compute_all(s):
             if tf in raw: out[tf][sym] = combine(raw, tf, s)
         sigs = [out[tf].get(sym, {}).get("signal") for tf in TFS]
         strong = sigs[0] in ("LONG", "SHORT") and all(x == sigs[0] for x in sigs)
+        flags = liq_flags(sym, s)
         for tf in TFS:
-            if sym in out[tf]: out[tf][sym]["strong"] = strong
+            if sym in out[tf]:
+                out[tf][sym]["strong"] = strong; out[tf][sym]["flags"] = flags
+                out[tf][sym]["filtered"] = bool(flags) and s["liq_filter"]
     STATE["signals"] = out; STATE["updated"] = time.time()
     STATE["scan"]["compute_s"] = round(time.time() - t0, 2)
 
-def is_hot(a): return a["signal"] != "NEUTRAL" and a["confidence"] >= HOT
+def liq_flags(sym, s):
+    """Funding / liquidity warnings for a symbol (empty list = OK)."""
+    out = []; t = STATE["tickers"].get(sym, {}); fr = STATE["funding"].get(sym)
+    if fr is not None and abs(fr) * 100 > s["max_funding_pct"]: out.append(f"funding {fr * 100:+.3f}%")
+    if t and t.get("qv", 0) < s["min_qv_musd"] * 1e6: out.append(f"low volume {t.get('qv', 0) / 1e6:.0f}M")
+    return out
+
+def is_hot(a): return a["signal"] != "NEUTRAL" and a["confidence"] >= HOT and not a.get("filtered")
+
+def favorites(): return kv_get("favorites", [])
 
 def sorted_signals(tf):
     sigs = STATE["signals"].get(tf, {})
@@ -371,36 +397,109 @@ def sorted_signals(tf):
     return sorted(sigs.items(), key=key)
 
 async def record_and_alert(s):
-    now = time.time()
+    """Record newly-hot (>=80%) signals to history + paper tracker, then send deduped, rate-capped alerts."""
+    now = time.time(); fresh = []
     for tf in TFS:
         for sym, a in STATE["signals"].get(tf, {}).items():
             k = (sym, tf); cur = a["signal"] if is_hot(a) else None
             if cur and STATE["hot_prev"].get(k) != cur:
+                k1 = KL.get((sym, tf)); last_ot = k1[5][-1] if k1 and len(k1) > 5 else now
                 with db() as c:
                     c.execute("INSERT INTO signals(ts,symbol,tf,signal,confidence,price,entry,tp,sl,strong) VALUES(?,?,?,?,?,?,?,?,?,?)",
                               (now, sym, tf, cur, a["confidence"], a["price"], a["entry"], a["tp"], a["sl"], int(a["strong"])))
+                    c.execute("INSERT INTO paper(ts,symbol,tf,side,confidence,entry,tp,sl,last_ot) VALUES(?,?,?,?,?,?,?,?,?)",
+                              (now, sym, tf, cur, a["confidence"], a["entry"], a["tp"], a["sl"], last_ot))
+                if STATE["hot_prev"]:  # skip the burst on the very first scan after start
+                    fresh.append((sym, tf, a))
             STATE["hot_prev"][k] = cur
-    if not s["alerts"]: return
-    tf = s["timeframe"]; new = []
-    for sym, a in sorted_signals(tf):
-        if not is_hot(a) or a["confidence"] < s["alert_threshold"]: continue
-        last = STATE["last_alert"].get(sym)
-        if not last or last[0] != a["signal"] or now - last[1] > 1800:
-            STATE["last_alert"][sym] = (a["signal"], now); new.append((sym, a))
-    if new:
-        lines = [f"🔔 {len(new)} new {tf} signal(s) ≥{s['alert_threshold']}% (indicator confidence, not win probability)"]
-        for sym, a in new[:10]:
-            lines.append(f"{'🟢' if a['signal'] == 'LONG' else '🔴'} {a['signal']} {sym} {a['confidence']}%{' ⚡' if a['strong'] else ''}\n"
-                         f"   Entry {fmt_price(sym, a['entry'])} | TP {fmt_price(sym, a['tp'])} | SL {fmt_price(sym, a['sl'])}")
-        await notify("\n".join(lines))
+    if not s["alerts"] or not fresh: return
+    favs = set(favorites()); cd = s["alert_cooldown_min"] * 60
+    STATE["alert_times"] = [t for t in STATE["alert_times"] if now - t < 60]
+    budget = s["max_alerts_per_min"] - len(STATE["alert_times"])
+    send, skipped = [], 0
+    for sym, tf, a in sorted(fresh, key=lambda x: (x[0] not in favs, -x[2]["confidence"])):
+        if a["confidence"] < s["alert_threshold"]: continue
+        if s["alerts_fav_only"] and sym not in favs: continue
+        key = f"{sym}|{tf}|{a['signal']}"
+        if now - STATE["last_alert"].get(key, 0) < cd: continue
+        if len(send) >= budget: skipped += 1; continue
+        STATE["last_alert"][key] = now; send.append((sym, tf, a))
+    if not send: return
+    STATE["alert_times"] += [now] * len(send)
+    lines = [f"🔔 Naye {s['alert_threshold']}%+ signals ({len(send)}) — indicator confidence, win probability nahi"]
+    for sym, tf, a in send:
+        lines.append(f"{'⭐ ' if sym in favs else ''}{'🟢' if a['signal'] == 'LONG' else '🔴'} {a['signal']} {sym} [{tf}] {a['confidence']}%{' ⚡' if a['strong'] else ''}\n"
+                     f"   Entry {fmt_price(sym, a['entry'])} | TP {fmt_price(sym, a['tp'])} | SL {fmt_price(sym, a['sl'])}")
+    if skipped: lines.append(f"(+{skipped} aur — per-minute limit; /signals dekhein)")
+    await notify("\n".join(lines))
+
+def update_paper():
+    """Mark paper signals TP / SL / EXPIRED from cached candles (candles that opened after the signal)."""
+    now = time.time(); changes = 0
+    with db() as c:
+        rows = [dict(r) for r in c.execute("SELECT * FROM paper WHERE status='OPEN'")]
+        for p in rows:
+            k = KL.get((p["symbol"], p["tf"])); status = None; exit_px = None; last_ot = p["last_ot"] or p["ts"]
+            if k and len(k) > 5:
+                d = 1 if p["side"] == "LONG" else -1
+                for i, ot in enumerate(k[5]):
+                    if ot <= (p["last_ot"] or p["ts"]): continue
+                    hi, lo = k[1][i], k[2][i]
+                    sl_hit = (lo <= p["sl"]) if d == 1 else (hi >= p["sl"])
+                    tp_hit = (hi >= p["tp"]) if d == 1 else (lo <= p["tp"])
+                    if sl_hit: status, exit_px = "SL", p["sl"]; break        # conservative: SL first if both in one candle
+                    if tp_hit: status, exit_px = "TP", p["tp"]; break
+                    if i < len(k[5]) - 1: last_ot = ot                        # only advance past fully closed candles
+            if not status and now - p["ts"] > PAPER_EXPIRE * TF_SEC[p["tf"]]:
+                status = "EXPIRED"; exit_px = k[3][-1] if k else None
+            if status:
+                c.execute("UPDATE paper SET status=?, closed_ts=?, exit=? WHERE id=?", (status, now, exit_px, p["id"])); changes += 1
+            elif last_ot != p["last_ot"]:
+                c.execute("UPDATE paper SET last_ot=? WHERE id=?", (last_ot, p["id"]))
+    return changes
+
+def paper_stats():
+    now = time.time(); out = {}
+    with db() as c:
+        for label, since in (("24h", now - 86400), ("7d", now - 7 * 86400)):
+            rows = c.execute("SELECT tf, side, status, COUNT(*) n FROM paper WHERE ts>=? GROUP BY tf, side, status", (since,)).fetchall()
+            per = {}
+            for r in rows:
+                d = per.setdefault(f"{r['tf']}|{r['side']}", {"tf": r["tf"], "side": r["side"], "TP": 0, "SL": 0, "EXPIRED": 0, "OPEN": 0})
+                d[r["status"]] = r["n"]
+            tot = {"TP": 0, "SL": 0, "EXPIRED": 0, "OPEN": 0}
+            for d in per.values():
+                d["win_rate"] = round(100 * d["TP"] / (d["TP"] + d["SL"]), 1) if d["TP"] + d["SL"] else None
+                for kk in tot: tot[kk] += d[kk]
+            tot["win_rate"] = round(100 * tot["TP"] / (tot["TP"] + tot["SL"]), 1) if tot["TP"] + tot["SL"] else None
+            out[label] = {"total": tot, "rows": sorted(per.values(), key=lambda x: (TFS.index(x["tf"]), x["side"]))}
+    return out
+
+def stats_text():
+    st = paper_stats(); lines = ["📈 Paper win-rate (80%+ signals, TP/SL from candles, expire 60 candles)", "Ye PAPER results hain, real trades nahi."]
+    for label in ("24h", "7d"):
+        t = st[label]["total"]; wr = f"{t['win_rate']}%" if t["win_rate"] is not None else "n/a"
+        lines.append(f"\n{label}: win {wr} · TP {t['TP']} · SL {t['SL']} · expired {t['EXPIRED']} · open {t['OPEN']}")
+        for r in st[label]["rows"]:
+            wr = f"{r['win_rate']}%" if r["win_rate"] is not None else "n/a"
+            lines.append(f"  {r['tf']:>3} {r['side']:<5} win {wr:>6} (TP {r['TP']}/SL {r['SL']}, exp {r['EXPIRED']}, open {r['OPEN']})")
+    return "\n".join(lines)
+
+async def refresh_funding():
+    if STATE["source"] != "futures": return
+    j = await md_get("premiumIndex", {})          # one bulk call (weight 10)
+    STATE["funding"] = {x["symbol"]: float(x.get("lastFundingRate") or 0) for x in j if x["symbol"] in STATE["info"]}
+    STATE["funding_ts"] = time.time()
 
 async def tickers_loop():
+    n = 0
     while True:
-        await asyncio.sleep(60)
+        await asyncio.sleep(60 if n else 5); n += 1
         try:
             if time.time() - STATE["universe_ts"] > 3600: await refresh_universe()
-            else: update_tickers(await md_get("ticker/24hr", {}))
-        except Exception as e: add_err(f"ticker/universe: {e}")
+            elif n > 1: update_tickers(await md_get("ticker/24hr", {}))
+            if time.time() - STATE.get("funding_ts", 0) > 300: await refresh_funding()
+        except Exception as e: add_err(f"ticker/universe/funding: {e}")
 
 async def htf_loop():
     """Higher timeframes (5m/15m/1h) refresh on their own schedule so the 1m scan stays ~15s fresh."""
@@ -424,6 +523,7 @@ async def scanner_loop():
                 s = get_settings(); compute_all(s)
                 STATE["scan"]["cycle_s"] = round(time.time() - t0, 2)
                 await record_and_alert(s)
+                update_paper()
                 await manage_positions()
                 await auto_trade()
         except Exception as e: add_err(f"scanner: {type(e).__name__}: {e}")
@@ -506,6 +606,27 @@ def today_pnl():
         r = c.execute("SELECT COALESCE(SUM(pnl),0) p FROM trades WHERE closed_ts>=? AND pnl IS NOT NULL", (start,)).fetchone()
     return float(r["p"])
 
+def trades_today():
+    start = time.time() - (time.time() % 86400)
+    with db() as c:
+        return c.execute("SELECT COUNT(*) n FROM trades WHERE ts>=? AND status!='FAILED'", (start,)).fetchone()["n"]
+
+def risk_status(s=None):
+    s = s or get_settings(); pnl = today_pnl(); n_open = len(open_trades()); n_day = trades_today()
+    blocks = []
+    if pnl <= -s["daily_loss_limit_usdt"]: blocks.append(f"daily loss {pnl:.2f}/-{s['daily_loss_limit_usdt']} USDT")
+    if n_open >= s["max_open_positions"]: blocks.append(f"open trades {n_open}/{s['max_open_positions']}")
+    if n_day >= s["max_trades_per_day"]: blocks.append(f"trades today {n_day}/{s['max_trades_per_day']}")
+    return {"today_pnl": round(pnl, 4), "daily_loss_limit": s["daily_loss_limit_usdt"], "open": n_open, "max_open": s["max_open_positions"],
+            "trades_today": n_day, "max_trades_per_day": s["max_trades_per_day"], "blocked": bool(blocks), "reasons": blocks}
+
+def risk_text():
+    r = risk_status()
+    return ("🛡 Risk guard (UTC din)\n"
+            f"Aaj ka PnL: {r['today_pnl']:+.2f} USDT (limit -{r['daily_loss_limit']})\n"
+            f"Open trades: {r['open']}/{r['max_open']}\nAaj ke trades: {r['trades_today']}/{r['max_trades_per_day']}\n"
+            + (("⛔ Naye trades BLOCK: " + "; ".join(r["reasons"])) if r["blocked"] else "✅ Naye trades allowed"))
+
 def log_trade(**kw):
     kw.setdefault("ts", time.time()); cols = ",".join(kw); qs = ",".join("?" * len(kw))
     with db() as c:
@@ -546,9 +667,8 @@ async def execute(sym, direction, mode="manual"):
         t = ots[0]
         if t["side"] == direction: return {"ok": False, "error": f"Already have an open {direction} on {sym}"}
         return await close_trade(t, f"{mode}: opposite signal")
-    if today_pnl() <= -s["daily_loss_limit_usdt"]:
-        return {"ok": False, "error": f"Daily loss limit reached ({today_pnl():.2f} USDT). Trading paused until 00:00 UTC."}
-    if len(open_trades()) >= s["max_open_positions"]: return {"ok": False, "error": "Max open positions reached"}
+    r = risk_status(s)
+    if r["blocked"]: return {"ok": False, "error": "Risk guard: " + "; ".join(r["reasons"]) + " (resets 00:00 UTC / when trades close)"}
     if market == "futures": return await futures_open(sym, direction, sig, s, mode)
     if direction == "SHORT": return {"ok": False, "error": "Shorts need Futures mode (Settings > Market: Futures)"}
     return await spot_buy(sym, sig, s, mode)
@@ -565,7 +685,7 @@ async def spot_buy(sym, sig, s, mode):
     tp, sl = px + (sig["tp"] - sig["entry"]), px - (sig["entry"] - sig["sl"])
     sell_qty = q_step(qty * 0.999, f["step"])
     tid = log_trade(symbol=sym, side="LONG", mode=mode, tf=s["timeframe"], market="spot", leverage=1, qty=float(sell_qty), price=px,
-                    quote=quote, tp=tp, sl=sl, status="OPEN", order_id=str(j.get("orderId")))
+                    quote=quote, tp=tp, sl=sl, atr=sig.get("atr"), status="OPEN", order_id=str(j.get("orderId")))
     st2, j2 = await signed("POST", "/api/v3/orderList/oco", {
         "symbol": sym, "side": "SELL", "quantity": sell_qty, "aboveType": "LIMIT_MAKER", "abovePrice": q_step(tp, f["tick"]),
         "belowType": "STOP_LOSS_LIMIT", "belowStopPrice": q_step(sl, f["tick"]), "belowPrice": q_step(sl * 0.998, f["tick"]),
@@ -596,7 +716,7 @@ async def futures_open(sym, direction, sig, s, mode):
     d = 1 if direction == "LONG" else -1
     tp, sl = px + d * abs(sig["tp"] - sig["entry"]), px - d * abs(sig["entry"] - sig["sl"])
     tid = log_trade(symbol=sym, side=direction, mode=mode, tf=s["timeframe"], market="futures", leverage=lev, qty=q, price=px,
-                    quote=q * px, tp=tp, sl=sl, status="OPEN", order_id=str(j.get("orderId")))
+                    quote=q * px, tp=tp, sl=sl, atr=sig.get("atr"), status="OPEN", order_id=str(j.get("orderId")))
     ids, errs = {}, []
     for kind, typ, trig in (("tp_algo", "TAKE_PROFIT_MARKET", tp), ("sl_algo", "STOP_MARKET", sl)):
         st2, j2 = await fsigned("POST", "/fapi/v1/algoOrder", {"algoType": "CONDITIONAL", "symbol": sym, "side": exit_side, "type": typ,
@@ -633,9 +753,43 @@ async def close_trade(t, reason):
 def last_price(sym):
     k = KL.get((sym, "1m")); return k[3][-1] if k else None
 
+async def trail_stop(t, px, s):
+    """Breakeven then ATR trailing. Updates the exchange stop (futures algo order) or switches to bot-managed exits."""
+    a = t.get("atr") or 0
+    if not s["trailing"] or not px or a <= 0: return t
+    d = 1 if t["side"] == "LONG" else -1; entry = t["price"]; sl = t["sl"]; new_sl = None
+    gain = (px - entry) * d
+    trig = min(s["be_trigger_atr"] * a, 0.5 * abs(t["tp"] - entry))
+    if not t.get("be_done") and gain >= trig and (entry - sl) * d > 0:
+        new_sl = entry; t["be_done"] = 1
+    if t.get("be_done"):
+        cand = px - d * s["trail_atr"] * a
+        if (cand - (new_sl if new_sl is not None else sl)) * d > 0.2 * a: new_sl = cand
+    if new_sl is None or (new_sl - sl) * d <= 0: return t
+    if time.time() - (t.get("sl_moved_ts") or 0) < 30 and new_sl != entry: return t
+    sym = t["symbol"]; upd = {"sl": new_sl, "be_done": 1, "sl_moved_ts": time.time()}
+    if t.get("market") == "futures" and t.get("sl_algo"):
+        meta = STATE["info"].get(sym, {})
+        st, j = await fsigned("POST", "/fapi/v1/algoOrder", {"algoType": "CONDITIONAL", "symbol": sym, "side": "SELL" if d == 1 else "BUY",
+                              "type": "STOP_MARKET", "triggerPrice": q_step(new_sl, meta.get("tick", "0.0001")), "closePosition": "true",
+                              "workingType": "MARK_PRICE", "priceProtect": "true"})
+        if st == 200:
+            await fsigned("DELETE", "/fapi/v1/algoOrder", {"algoId": t["sl_algo"]}); upd["sl_algo"] = str(j.get("algoId"))
+        else:
+            upd["error"] = f"trail update failed ({j.get('msg')}); bot-managed SL"   # old exchange SL stays as a backstop
+    elif t.get("market") != "futures" and t.get("oco_id"):
+        await signed("DELETE", "/api/v3/orderList", {"symbol": sym, "orderListId": t["oco_id"]}); upd["oco_id"] = None
+        upd["error"] = "OCO replaced by bot-managed trailing exits"
+    upd_trade(t["id"], **upd); t.update(upd)
+    if new_sl == entry: await notify(f"🔒 {t['side']} {sym}: SL breakeven par (entry {entry:.6g})")
+    return t
+
 async def manage_positions():
+    s = get_settings()
     for t in open_trades():
         sym = t["symbol"]; px = last_price(sym)
+        try: t = await trail_stop(t, px, s)
+        except Exception as e: add_err(f"trail {sym}: {type(e).__name__}: {e}")
         if t.get("market") == "futures":
             st, j = await fsigned("GET", "/fapi/v3/positionRisk", {"symbol": sym})
             if st == 200:
@@ -648,7 +802,7 @@ async def manage_positions():
                     upd_trade(t["id"], status="CLOSED", exit_price=px, pnl=pnl, closed_ts=time.time(), error="exchange TP/SL hit")
                     await notify(f"{t['side']} {sym} closed by TP/SL. Realized PnL {pnl if pnl is None else f'{pnl:+.3f}'} USDT")
                     continue
-            if px and not (t.get("tp_algo") and t.get("sl_algo")):
+            if px and (not (t.get("tp_algo") and t.get("sl_algo")) or "bot-managed" in (t.get("error") or "")):
                 d = 1 if t["side"] == "LONG" else -1
                 if (px - t["tp"]) * d >= 0: await close_trade(t, "take-profit (tracked)")
                 elif (px - t["sl"]) * d <= 0: await close_trade(t, "stop-loss (tracked)")
@@ -674,6 +828,7 @@ async def auto_trade():
         save_settings({"auto_trade": False}); await notify("Auto Trade switched OFF: API key has no trading permission for " + s["market"]); return
     if today_pnl() <= -s["daily_loss_limit_usdt"]:
         save_settings({"auto_trade": False}); await notify("Daily loss limit hit. Auto Trade switched OFF."); return
+    if trades_today() >= s["max_trades_per_day"]: return
     for sym, a in sorted_signals(s["timeframe"]):
         if not is_hot(a) or a["confidence"] < s["auto_min_confidence"]: break
         ots = open_trades(sym)
@@ -763,6 +918,60 @@ def key_lines(kc):
             f"  Futures: {yn(kc.get('futures_enabled'))} (read {'OK' if kc.get('futures_read_ok') else 'FAIL'}, order test "
             f"{'OK' if kc.get('futures_order_test_ok') else 'FAIL'})\n  Withdrawals: {'ENABLED ⚠️' if kc.get('withdrawals_enabled') else 'disabled ✅'}")
 
+HELP_TEXT = ("⚡ Scalping Bot — commands\n"
+    "/signals [1m|5m|15m] — 80%+ LONG/SHORT setups (entry/TP/SL)\n"
+    "/alerts on|off|80|85|90|fav|all — auto alerts (default ON, 80%)\n"
+    "/stats — paper win-rate (24h / 7d, per timeframe & side)\n"
+    "/risk — risk guard: daily loss, open trades, trades/day\n"
+    "/fav add|remove SYMBOL, /fav list — favorites / watchlist\n"
+    "/balance — spot & futures balances\n"
+    "/auto on|off — auto trade (default OFF)\n"
+    "/status — scanner, rate-limit & API key status\n"
+    "/help — ye list\n\n"
+    "Confidence = indicator agreement, win probability nahi. Paper stats real trades nahi hain.")
+
+def norm_sym(x):
+    x = x.upper().replace("/", "").strip()
+    return x if x.endswith("USDT") else x + "USDT"
+
+def extra_command(cmd, args):
+    """New commands; returns reply text or None. Pure function of DB/state so it can be tested without Telegram."""
+    s = get_settings()
+    if cmd == "/help": return HELP_TEXT
+    if cmd == "/stats": return stats_text()
+    if cmd == "/risk": return risk_text()
+    if cmd == "/alerts":
+        a = (args[0].lower() if args else "")
+        if a in ("on", "off"): s = save_settings({"alerts": a == "on"})
+        elif a in ("80", "85", "90"): s = save_settings({"alert_threshold": int(a), "alerts": True})
+        elif a == "fav": s = save_settings({"alerts_fav_only": True})
+        elif a == "all": s = save_settings({"alerts_fav_only": False})
+        elif a: return "Use: /alerts on|off|80|85|90|fav|all"
+        return (f"🔔 Alerts {'ON' if s['alerts'] else 'OFF'} · threshold {s['alert_threshold']}% · "
+                f"{'sirf favorites' if s['alerts_fav_only'] else 'sab coins'} · cooldown {s['alert_cooldown_min']} min per coin+tf+side · "
+                f"max {s['max_alerts_per_min']}/min · 1m/5m/15m")
+    if cmd == "/fav":
+        favs = favorites(); sub = args[0].lower() if args else "list"
+        if sub in ("add", "remove", "rm", "del") and len(args) >= 2:
+            sym = norm_sym(args[1])
+            if sub == "add":
+                if sym not in STATE["info"] and STATE["info"]: return f"{sym} scanner list (top 200) mein nahi hai."
+                if sym not in favs: favs.append(sym)
+            else: favs = [f for f in favs if f != sym]
+            kv_set("favorites", favs)
+            return f"⭐ Favorites ({len(favs)}): " + (", ".join(favs) or "empty")
+        if sub != "list": return "Use: /fav add SOL · /fav remove SOL · /fav list"
+        if not favs: return "⭐ Koi favorite nahi. Add: /fav add SOL"
+        lines = ["⭐ Favorites"]
+        for sym in favs:
+            parts = []
+            for tf in TFS:
+                a = STATE["signals"].get(tf, {}).get(sym)
+                if a: parts.append(f"{tf} {a['signal'][0] if a['signal'] != 'NEUTRAL' else '-'}{a['confidence']}")
+            lines.append(f"{sym}: " + (" · ".join(parts) or "no data"))
+        return "\n".join(lines)
+    return None
+
 async def handle(msg):
     chat = msg.get("chat", {}); frm = msg.get("from", {}); text = (msg.get("text") or "").strip()
     if chat.get("type") != "private" or not text.startswith("/"): return
@@ -774,11 +983,14 @@ async def handle(msg):
     if frm.get("id") != o:
         await tg("sendMessage", chat_id=chat["id"], text="⛔ This is a private bot."); return
     s = get_settings(); cid = chat["id"]
+    reply = extra_command(cmd, args)
+    if reply is not None:
+        await tg("sendMessage", chat_id=cid, text=reply[:4000]); return
     if cmd == "/start":
         kb = open_btn()
         await tg("sendMessage", chat_id=cid, text=("⚡ Scalping Bot ready.\nScanning the top ~200 Binance USDT-M futures coins on 1m / 5m / 15m "
                  "with EMA 9/21/50, RSI, MACD, VWAP, Bollinger, volume and candle patterns, plus higher-timeframe confirmation.\n\n"
-                 "/signals [1m|5m|15m] — 80%+ setups\n/balance\n/auto on|off\n/status\n\nAuto Trade is OFF by default. "
+                 "/signals · /alerts · /stats · /risk · /fav · /balance · /auto · /status · /help\n\nAuto Trade is OFF by default. Alerts ON (80%+). "
                  "Confidence = indicator agreement, not win probability.") + ("" if kb else "\n(Mini app offline; use /signals buttons.)"),
                  **({"reply_markup": kb} if kb else {}))
     elif cmd == "/signals":
@@ -826,7 +1038,10 @@ async def bot_loop():
     offset = kv_get("tg_offset", 0)
     await tg("setMyCommands", commands=[{"command": "start", "description": "Open the scalping app"},
         {"command": "signals", "description": "80%+ signals: /signals 1m|5m|15m"}, {"command": "balance", "description": "Spot & futures balances"},
-        {"command": "auto", "description": "Auto trade on|off"}, {"command": "status", "description": "Bot, scanner & key status"}])
+        {"command": "alerts", "description": "Alerts on|off|80|85|90|fav|all"}, {"command": "stats", "description": "Paper win-rate"},
+        {"command": "risk", "description": "Risk guard status"}, {"command": "fav", "description": "Favorites: add|remove|list"},
+        {"command": "auto", "description": "Auto trade on|off"}, {"command": "status", "description": "Bot, scanner & key status"},
+        {"command": "help", "description": "All commands"}])
     while True:
         try:
             j = await tg("getUpdates", offset=offset, timeout=25, allowed_updates=["message", "callback_query"])
@@ -881,7 +1096,7 @@ def auth(request: Request):
 @asynccontextmanager
 async def lifespan(app):
     global client
-    init_db(); client = httpx.AsyncClient(limits=httpx.Limits(max_connections=20))
+    init_db(); client = httpx.AsyncClient(limits=httpx.Limits(max_connections=60, max_keepalive_connections=40), timeout=httpx.Timeout(15, pool=60))
     STATE["webapp_url"] = os.environ.get("WEBAPP_URL") or (open(URL_FILE).read().strip() if os.path.exists(URL_FILE) else "") or None
     await detect_source()
     tasks = [asyncio.create_task(scanner_loop()), asyncio.create_task(htf_loop()), asyncio.create_task(tickers_loop())]
@@ -895,24 +1110,31 @@ async def lifespan(app):
     await client.aclose()
 
 J = JSONResponse
+FAVSET = set()
 
 def row(sym, a):
     t = STATE["tickers"].get(sym, {})
     return {"symbol": sym, "base": STATE["info"].get(sym, {}).get("base", sym), "signal": a["signal"], "confidence": a["confidence"],
             "hot": is_hot(a), "strong": a["strong"], "price": fmt_price(sym, a["price"]), "entry": fmt_price(sym, a["entry"]),
-            "tp": fmt_price(sym, a["tp"]), "sl": fmt_price(sym, a["sl"]), "change24h": t.get("chg"), "qv": t.get("qv")}
+            "tp": fmt_price(sym, a["tp"]), "sl": fmt_price(sym, a["sl"]), "change24h": t.get("chg"), "qv": t.get("qv"),
+            "funding": round(STATE["funding"][sym] * 100, 4) if sym in STATE["funding"] else None,
+            "flags": a.get("flags", []), "filtered": a.get("filtered", False), "fav": sym in FAVSET}
 
 async def index(request): return FileResponse(os.path.join(BASE, "static", "index.html"), headers={"Cache-Control": "no-store"})
 
 async def health(request):
     return J({"ok": True, "updated": STATE["updated"], "source": STATE["source"], "coins": len(STATE["universe"]),
               "scan": STATE["scan"], "weight": STATE["weight"], "rate_limit_hits": STATE["rate_limit_hits"],
-              "fetch_errors": STATE["fetch_errors"], "requests": STATE["requests"], "bot_poll_ok": STATE["poll_ok"]})
+              "fetch_errors": STATE["fetch_errors"], "requests": STATE["requests"], "bot_poll_ok": STATE["poll_ok"],
+              "funding_symbols": len(STATE["funding"]), "recent_errors": STATE["errors"][:3]})
 
 async def api_signals(request: Request):
     auth(request); tf = request.query_params.get("tf", "5m")
     if tf not in TFS: raise HTTPException(400, "tf must be 1m, 5m or 15m")
+    global FAVSET
+    FAVSET = set(favorites())
     rows = [row(s, a) for s, a in sorted_signals(tf)]
+    rows.sort(key=lambda r: not r["fav"])   # stable: favorites pinned on top, keeping hot-first order
     return J({"tf": tf, "updated": STATE["updated"], "refresh_sec": FETCH_EVERY["1m"], "source": STATE["source"], "count": len(rows),
               "hot": sum(1 for r in rows if r["hot"]), "long": sum(1 for r in rows if r["signal"] == "LONG"),
               "short": sum(1 for r in rows if r["signal"] == "SHORT"), "signals": rows})
@@ -921,6 +1143,8 @@ async def api_signal(request: Request):
     auth(request); tf = request.query_params.get("tf", "5m"); sym = request.query_params.get("symbol", "")
     a = STATE["signals"].get(tf, {}).get(sym)
     if not a: raise HTTPException(404, "unknown symbol")
+    global FAVSET
+    FAVSET = set(favorites())
     out = row(sym, a); out.update({k: a[k] for k in ("indicators", "notes", "patterns", "htf", "atr_pct", "rsi", "score")})
     out["others"] = {t: STATE["signals"].get(t, {}).get(sym, {}).get("signal") for t in TFS}
     return J(out)
@@ -942,6 +1166,7 @@ async def api_settings(request: Request):
         return J({"settings": save_settings(body)})
     kc = STATE.get("key_check") or {}
     return J({"settings": get_settings(), "open_positions": open_trades(), "today_pnl": today_pnl(), "max_leverage": MAX_LEVERAGE,
+              "risk": risk_status(), "favorites": favorites(),
               "key": {k: kc.get(k) for k in ("account_ok", "spot_trading_enabled", "futures_enabled", "futures_read_ok",
                                               "futures_order_test_ok", "withdrawals_enabled", "order_test_ok", "ip_restricted")}})
 
@@ -953,11 +1178,25 @@ async def api_trade(request: Request):
     if TEST_MODE: return J({"ok": False, "error": "Test mode: no orders placed"})
     return J(await execute(sym, d, "manual"))
 
+async def api_stats(request: Request):
+    auth(request)
+    with db() as c:
+        recent = [dict(r) for r in c.execute("SELECT * FROM paper ORDER BY id DESC LIMIT 60")]
+    return J({"stats": paper_stats(), "recent": recent, "risk": risk_status()})
+
+async def api_fav(request: Request):
+    auth(request); body = await request.json()
+    sym = norm_sym(str(body.get("symbol", ""))); favs = favorites()
+    if sym not in STATE["info"]: raise HTTPException(400, "unknown symbol")
+    if body.get("on") and sym not in favs: favs.append(sym)
+    if not body.get("on"): favs = [f for f in favs if f != sym]
+    kv_set("favorites", favs); return J({"favorites": favs})
+
 async def http_error(request, exc): return J({"detail": exc.detail}, status_code=exc.status_code)
 
 app = Starlette(routes=[
     Route("/", index), Route("/healthz", health), Route("/api/signals", api_signals), Route("/api/signal", api_signal),
     Route("/api/history", api_history), Route("/api/settings", api_settings, methods=["GET", "POST"]),
-    Route("/api/trade", api_trade, methods=["POST"]),
+    Route("/api/trade", api_trade, methods=["POST"]), Route("/api/stats", api_stats), Route("/api/fav", api_fav, methods=["POST"]),
     Mount("/static", StaticFiles(directory=os.path.join(BASE, "static")), name="static"),
 ], lifespan=lifespan, exception_handlers={HTTPException: http_error})

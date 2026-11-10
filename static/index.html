@@ -57,13 +57,21 @@ tr.hotrow td{background:rgba(19,200,240,.07)}tr.hotrow td:first-child{box-shadow
 .LONG{color:var(--green)}.SHORT{color:var(--red)}.NEUTRAL{color:var(--grey)}.ex.LONG{background:var(--green);color:#fff}.ex.SHORT{background:var(--red);color:#fff}
 .form select{background:#0f1522;border:1px solid var(--line);color:var(--txt);border-radius:7px;padding:6px}
 .note{font-size:10.5px;color:#fbbf24;margin-top:6px}
+.star{background:none;border:0;color:#5b6678;font-size:15px;cursor:pointer;padding:0 4px 0 0;line-height:1}.star.on{color:#fbbf24}
+.flag{display:inline-block;margin-left:4px;font-size:9.5px;padding:1px 5px;border-radius:5px;background:#2a1d0b;color:#fbbf24;font-weight:700}
+tr.filt td{opacity:.6}.sec{padding:10px 14px 4px;color:var(--cyan);font:600 12px ui-monospace,Menlo,monospace;letter-spacing:.5px}
+.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;padding:4px 14px 10px}.grid div{background:#0f1522;border:1px solid var(--line);border-radius:9px;padding:8px;text-align:center}
+.grid b{display:block;font-size:16px}.grid span{font-size:10px;color:var(--mut)}
+.st{width:100%;border-collapse:collapse;font-size:12px}.st td,.st th{padding:7px 14px;border-bottom:1px solid var(--line)}.st th{border-top:0}
+.riskbox{margin:0 14px 10px;padding:10px;border-radius:9px;background:#0f1522;border:1px solid var(--line);font-size:12px}
 .warn{margin:0 14px 12px;padding:10px;border-radius:9px;background:#2a1d0b;color:#fbbf24;font-size:12px}
 </style></head><body>
 <div class="top">
-  <button class="tab on" id="tLive" onclick="view('live')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>Live Signals</button>
-  <button class="tab" id="tHist" onclick="view('hist')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l3 2"/></svg>Signals History</button>
+  <button class="tab on" id="tLive" onclick="view('live')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>Live</button>
+  <button class="tab" id="tHist" onclick="view('hist')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l3 2"/></svg>History</button>
+  <button class="tab" id="tStat" onclick="view('stat')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>Stats</button>
   <div class="sp"></div>
-  <button class="gear" onclick="view('set')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>Settings</button>
+  <button class="gear" onclick="view('set')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
 </div>
 
 <div id="vLive">
@@ -80,7 +88,7 @@ tr.hotrow td{background:rgba(19,200,240,.07)}tr.hotrow td:first-child{box-shadow
   <div class="card">
     <div class="ch"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#13c8f0" stroke-width="2"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>
       <div><h2>Scalping Scanner <span id="tfLbl" style="color:var(--cyan)"></span></h2><p>Top 200 Binance USDT-M futures by volume · tap a row for entry / TP / SL and indicator details</p></div></div>
-    <div class="tools"><button class="chip on" data-f="all">All</button><button class="chip" data-f="hot">80%+</button><button class="chip" data-f="LONG">Long</button><button class="chip" data-f="SHORT">Short</button><input class="search" id="q" placeholder="Search coin…" autocomplete="off"></div>
+    <div class="tools"><button class="chip on" data-f="all">All</button><button class="chip" data-f="hot">80%+</button><button class="chip" data-f="LONG">Long</button><button class="chip" data-f="SHORT">Short</button><button class="chip" data-f="fav">★ Fav</button><input class="search" id="q" placeholder="Search coin…" autocomplete="off"></div>
     <div class="stats" id="stats"></div>
     <table><thead><tr><th style="padding-left:12px">ASSET</th><th>SIGNAL</th><th>CONFIDENCE</th><th class="r">PRICE</th><th class="c">TRADE</th></tr></thead>
       <tbody id="rows"><tr><td colspan="5" class="msg">Loading signals… (first scan of 200 coins takes ~30s)</td></tr></tbody></table><button class="more hide" id="moreBtn" onclick="PAGE+=50;render()">Show more</button>
@@ -93,6 +101,13 @@ tr.hotrow td{background:rgba(19,200,240,.07)}tr.hotrow td:first-child{box-shadow
   <div class="card"><div class="ch"><div><h2>Trade History</h2><p>Manual and auto trades</p></div></div><div class="list" id="hTr"></div></div>
 </div>
 
+<div id="vStat" class="hide">
+  <div class="card"><div class="ch"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#13c8f0" stroke-width="2"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>
+    <div><h2>Paper Win-Rate</h2><p>Har 80%+ signal paper par track hota hai: TP hit / SL hit / 60 candles ke baad expired. PAPER results, real trades nahi.</p></div></div>
+    <div id="statBody"><div class="msg">Loading…</div></div></div>
+  <div class="card"><div class="ch"><div><h2>Recent Paper Signals</h2><p>Latest 60</p></div></div><div class="list" id="paperList"></div></div>
+</div>
+
 <div id="vSet" class="hide"><div class="card">
   <div class="ch"><div><h2>Settings</h2><p>Risk controls apply to manual and auto trades</p></div></div>
   <div class="form">
@@ -101,14 +116,28 @@ tr.hotrow td{background:rgba(19,200,240,.07)}tr.hotrow td:first-child{box-shadow
     <label>Leverage (futures, isolated)<input type="number" id="sLev" min="1" max="10" step="1"></label>
     <label>Order margin (USDT)<input type="number" id="sOrder" min="5" step="1"></label>
     <label>Max open positions<input type="number" id="sMax" min="1" max="10"></label>
+    <div class="sec">RISK GUARD</div>
     <label>Daily loss limit (USDT)<input type="number" id="sLoss" min="0.5" step="0.5"></label>
+    <label>Max trades per day<input type="number" id="sDay" min="1" max="200"></label>
     <label>Auto min confidence (%)<input type="number" id="sConf" min="80" max="99"></label>
     <label>Stop-loss (× ATR)<input type="number" id="sSl" min="0.3" step="0.1"></label>
     <label>Take-profit (× ATR)<input type="number" id="sTp" min="0.3" step="0.1"></label>
+    <div class="sec">TRAILING STOP / BREAKEVEN</div>
+    <label>Trailing + breakeven<label class="sw" style="border:0;padding:0"><input type="checkbox" id="sTr"><i></i></label></label>
+    <label>Breakeven at profit (× ATR)<input type="number" id="sBe" min="0.1" step="0.1"></label>
+    <label>Trail distance (× ATR)<input type="number" id="sTa" min="0.2" step="0.1"></label>
+    <div class="sec">ALERTS</div>
     <label>Telegram alerts<label class="sw" style="border:0;padding:0"><input type="checkbox" id="sAl"><i></i></label></label>
-    <label>Alert threshold (%)<input type="number" id="sAlT" min="80" max="99"></label>
+    <label>Alert threshold<select id="sAlT"><option value="80">80%+</option><option value="85">85%+</option><option value="90">90%+</option></select></label>
+    <label>Favorites only<label class="sw" style="border:0;padding:0"><input type="checkbox" id="sAlF"><i></i></label></label>
+    <label>Cooldown (min, per coin+tf+side)<input type="number" id="sCd" min="1" max="240"></label>
+    <label>Max alerts per minute<input type="number" id="sApm" min="1" max="30"></label>
+    <div class="sec">FUNDING / LIQUIDITY FILTER</div>
+    <label>Filter risky coins<label class="sw" style="border:0;padding:0"><input type="checkbox" id="sLq"><i></i></label></label>
+    <label>Max |funding| (%)<input type="number" id="sFr" min="0.01" step="0.01"></label>
+    <label>Min 24h volume (M USDT)<input type="number" id="sQv" min="0" step="1"></label>
     <button class="btn" onclick="saveSet()">Save settings</button>
-  </div><div class="kv" id="keyInfo"></div>
+  </div><div class="riskbox" id="riskBox"></div><div class="kv" id="keyInfo"></div>
 </div></div>
 
 <script>
@@ -122,8 +151,9 @@ async function api(p, opt={}) {
 }
 function alertMsg(m){ tg && tg.showAlert ? tg.showAlert(m) : alert(m) }
 function confirmMsg(m){ return new Promise(res => tg && tg.showConfirm && tg.initData ? tg.showConfirm(m, res) : res(confirm(m))) }
-function view(v){ for (const [id,t] of [['vLive','tLive'],['vHist','tHist'],['vSet',null]]) { document.getElementById(id).classList.toggle('hide', id !== {live:'vLive',hist:'vHist',set:'vSet'}[v]); if(t) document.getElementById(t).classList.toggle('on', id==={live:'vLive',hist:'vHist'}[v]); }
-  if (v==='hist') loadHist(); if (v==='set') loadSet(); }
+function view(v){ const M={live:'vLive',hist:'vHist',stat:'vStat',set:'vSet'};
+  for (const [id,t] of [['vLive','tLive'],['vHist','tHist'],['vStat','tStat'],['vSet',null]]) { document.getElementById(id).classList.toggle('hide', id !== M[v]); if(t) document.getElementById(t).classList.toggle('on', id===M[v]); }
+  if (v==='hist') loadHist(); if (v==='set') loadSet(); if (v==='stat') loadStats(); }
 function mode(m){ pMan.classList.toggle('on', m==='man'); pAuto.classList.toggle('on', m==='auto'); autoCard.classList.toggle('hide', m!=='auto'); if (m==='auto') loadSet(); }
 function segInit(el, cur, cb){ el.querySelectorAll('button').forEach(b=>{ b.classList.toggle('on', b.dataset.tf===cur); b.onclick=()=>{ el.querySelectorAll('button').forEach(x=>x.classList.remove('on')); b.classList.add('on'); cb(b.dataset.tf) } }) }
 segInit(seg, TF, tf => { TF = tf; localStorage.setItem('tf', tf); load() });
@@ -136,7 +166,7 @@ q.oninput=()=>{PAGE=50;render()};
 const colOf = s => { let h=0; for (const ch of s) h=(h*31+ch.charCodeAt(0))%360; return `hsl(${h},70%,62%)` };
 const ICN = {LONG:ic.BUY, SHORT:ic.SELL, NEUTRAL:ic.HOLD};
 const fmtVol = v => v>=1e9?(v/1e9).toFixed(1)+'B':v>=1e6?(v/1e6).toFixed(0)+'M':(v/1e3).toFixed(0)+'K';
-function rowsFiltered(){ const qq=q.value.trim().toUpperCase(); return DATA.filter(s=>(FILTER==='all'||(FILTER==='hot'&&s.hot)||s.signal===FILTER)&&(!qq||s.symbol.includes(qq))) }
+function rowsFiltered(){ const qq=q.value.trim().toUpperCase(); return DATA.filter(s=>(FILTER==='all'||(FILTER==='hot'&&s.hot)||(FILTER==='fav'&&s.fav)||s.signal===FILTER)&&(!qq||s.symbol.includes(qq))) }
 function render(){
   tfLbl.textContent = '· ' + TF; const list = rowsFiltered(); const shown = list.slice(0, PAGE);
   moreBtn.classList.toggle('hide', list.length <= PAGE); moreBtn.textContent = `Show more (${list.length-PAGE} left)`;
@@ -147,10 +177,10 @@ function render(){
     const ex = s.signal==='NEUTRAL' ? '<span class="exh">—</span>' : `<button class="ex ${s.signal}" onclick="event.stopPropagation();trade('${s.symbol}','${s.signal}')">${s.signal}</button>`;
     const d = DETAIL[s.symbol];
     const det = OPEN[s.symbol] ? `<tr class="det"><td colspan="5"><div class="lv"><div><span>Entry</span><b>${s.entry}</b></div><div><span>Take-profit</span><b class="up">${s.tp}</b></div><div><span>Stop-loss</span><b class="dn">${s.sl}</b></div></div>
-      ${d ? `<div class="ind">${d.indicators.map(i=>`<span class="${i.vote>0?'up':i.vote<0?'dn':''}">${i.name}: ${i.detail}</span>`).join('')}<span>ATR ${d.atr_pct}%</span><span>1m ${d.others['1m']} · 5m ${d.others['5m']} · 15m ${d.others['15m']}</span></div>${d.notes.length?`<div class="note">⚠ ${d.notes.join(' · ')}</div>`:''}` : '<div class="ind"><span>Loading details…</span></div>'}</td></tr>` : '';
+      ${d ? `<div class="ind">${d.indicators.map(i=>`<span class="${i.vote>0?'up':i.vote<0?'dn':''}">${i.name}: ${i.detail}</span>`).join('')}<span>ATR ${d.atr_pct}%</span>${d.funding!=null?`<span>Funding ${d.funding}%</span>`:''}${d.flags.length?`<span class="dn">⚠ ${d.flags.join(', ')}${d.filtered?' (alerts/auto skip)':''}</span>`:''}<span>1m ${d.others['1m']} · 5m ${d.others['5m']} · 15m ${d.others['15m']}</span></div>${d.notes.length?`<div class="note">⚠ ${d.notes.join(' · ')}</div>`:''}` : '<div class="ind"><span>Loading details…</span></div>'}</td></tr>` : '';
     const base = s.base.length > 9 ? s.base.slice(0,9)+'…' : s.base;
-    return `<tr class="${s.hot?'hotrow':''}" onclick="toggle('${s.symbol}')"><td style="padding-left:12px"><div class="asset"><span class="ai" style="color:${colOf(s.base)}">${[...s.base][0]}</span><div><div class="sym">${base}</div><div class="nm">Vol ${fmtVol(s.qv||0)}</div></div></div></td>
-      <td><div class="sig ${s.signal}">${ICN[s.signal]} ${s.signal==='NEUTRAL'?'NEUT':s.signal}</div>${s.strong?'<span class="strong">⚡ MTF</span>':''}${s.hot?'<span class="hotb">80%+</span>':''}</td>
+    return `<tr class="${s.hot?'hotrow':''} ${s.filtered?'filt':''}" onclick="toggle('${s.symbol}')"><td style="padding-left:8px"><div class="asset"><button class="star ${s.fav?'on':''}" onclick="event.stopPropagation();fav('${s.symbol}',${!s.fav})">${s.fav?'★':'☆'}</button><span class="ai" style="color:${colOf(s.base)}">${[...s.base][0]}</span><div><div class="sym">${base}</div><div class="nm">Vol ${fmtVol(s.qv||0)}</div></div></div></td>
+      <td><div class="sig ${s.signal}">${ICN[s.signal]} ${s.signal==='NEUTRAL'?'NEUT':s.signal}</div>${s.strong?'<span class="strong">⚡ MTF</span>':''}${s.hot?'<span class="hotb">80%+</span>':''}${s.flags&&s.flags.length?`<span class="flag" title="${s.flags.join(', ')}">⚠ ${s.flags[0].split(' ')[0]==='funding'?'funding':'low vol'}</span>`:''}</td>
       <td><div class="cf"><div class="bar"><i style="width:${s.confidence}%;background:${barC}"></i></div><span class="pct">${s.confidence}%</span></div></td>
       <td class="r"><div class="px">$${s.price}</div>${ch}</td><td class="c">${ex}</td></tr>${det}`;
   }).join('');
@@ -178,11 +208,29 @@ async function loadHist(){
     hTr.innerHTML = j.trades.map(t=>`<div class="it"><div><b class="${t.side}">${t.side}</b> ${t.symbol} <small>${t.market||'spot'}${t.leverage>1?' '+t.leverage+'x':''} · ${t.mode} · ${t.status}</small><br><small>${t.price?('@ '+(+t.price).toPrecision(6)):''} ${t.pnl!=null?('PnL '+t.pnl.toFixed(3)):''} ${t.error||''}</small></div><small>${fmtT(t.ts)}</small></div>`).join('') || '<div class="msg">No trades yet.</div>';
   } catch(e){ hSig.innerHTML = `<div class="msg">${e.message}</div>` }
 }
+async function fav(sym, on){ try { await api('/api/fav', {method:'POST', body: JSON.stringify({symbol:sym, on})}); const r = DATA.find(x=>x.symbol===sym); if (r) r.fav = on;
+  DATA.sort((a,b)=>(b.fav?1:0)-(a.fav?1:0)); render() } catch(e){ alertMsg('❌ '+e.message) } }
+const pct = v => v==null ? 'n/a' : v+'%';
+async function loadStats(){
+  try { const j = await api('/api/stats'); let h = '';
+    for (const L of ['24h','7d']) { const t = j.stats[L].total;
+      h += `<div class="sec">LAST ${L.toUpperCase()}</div><div class="grid"><div><b style="color:var(--cyan)">${pct(t.win_rate)}</b><span>win rate</span></div><div><b class="up">${t.TP}</b><span>TP hit</span></div><div><b class="dn">${t.SL}</b><span>SL hit</span></div><div><b>${t.EXPIRED}</b><span>expired · ${t.OPEN} open</span></div></div>`;
+      if (j.stats[L].rows.length) h += `<table class="st"><tr><th>TF</th><th>Side</th><th>Win</th><th>TP/SL</th><th>Exp/Open</th></tr>${j.stats[L].rows.map(r=>`<tr><td>${r.tf}</td><td class="${r.side}">${r.side}</td><td><b>${pct(r.win_rate)}</b></td><td>${r.TP}/${r.SL}</td><td>${r.EXPIRED}/${r.OPEN}</td></tr>`).join('')}</table>`;
+    }
+    const rk = j.risk; h += `<div class="sec">RISK GUARD</div><div class="riskbox">${riskHtml(rk)}</div>`;
+    statBody.innerHTML = h;
+    paperList.innerHTML = j.recent.map(p=>`<div class="it"><div><b class="${p.side}">${p.side}</b> ${p.symbol} <small>${p.tf} · ${p.confidence}% · ${p.status==='TP'?'✅ TP':p.status==='SL'?'❌ SL':p.status==='EXPIRED'?'⌛ expired':'⏳ open'}</small><br><small>E ${(+p.entry).toPrecision(6)} · TP ${(+p.tp).toPrecision(6)} · SL ${(+p.sl).toPrecision(6)}</small></div><small>${fmtT(p.ts)}</small></div>`).join('') || '<div class="msg">Abhi koi paper signal nahi.</div>';
+  } catch(e){ statBody.innerHTML = `<div class="msg">${e.message}</div>` }
+}
+function riskHtml(rk){ return `Today PnL <b>${rk.today_pnl.toFixed(2)}</b> / -${rk.daily_loss_limit} USDT · open <b>${rk.open}/${rk.max_open}</b> · trades today <b>${rk.trades_today}/${rk.max_trades_per_day}</b><br>${rk.blocked?'<span class="dn">⛔ New trades blocked: '+rk.reasons.join('; ')+'</span>':'<span class="up">✅ New trades allowed</span>'}` }
 async function loadSet(){
   try { const j = await api('/api/settings'); SET = j.settings; SSTF = SET.timeframe;
     segInit(segS, SSTF, tf => SSTF = tf);
     sOrder.value = SET.order_size_usdt; sMkt.value = SET.market; sLev.value = SET.leverage; sMax.value = SET.max_open_positions; sLoss.value = SET.daily_loss_limit_usdt; sConf.value = SET.auto_min_confidence;
-    sSl.value = SET.atr_sl_mult; sTp.value = SET.atr_tp_mult; sAl.checked = SET.alerts; sAlT.value = SET.alert_threshold;
+    sSl.value = SET.atr_sl_mult; sTp.value = SET.atr_tp_mult; sAl.checked = SET.alerts; sAlT.value = String(SET.alert_threshold >= 90 ? 90 : SET.alert_threshold >= 85 ? 85 : 80);
+    sDay.value = SET.max_trades_per_day; sTr.checked = SET.trailing; sBe.value = SET.be_trigger_atr; sTa.value = SET.trail_atr;
+    sAlF.checked = SET.alerts_fav_only; sCd.value = SET.alert_cooldown_min; sApm.value = SET.max_alerts_per_min;
+    sLq.checked = SET.liq_filter; sFr.value = SET.max_funding_pct; sQv.value = SET.min_qv_musd; riskBox.innerHTML = riskHtml(j.risk);
     autoSw.checked = SET.auto_trade; const k = j.key;
     autoInfo.textContent = `${SET.auto_trade?'ON':'OFF'} · ${SET.market}${SET.market==='futures'?' '+SET.leverage+'x':''} · ${SET.timeframe} · ${SET.order_size_usdt} USDT/trade · min conf ${SET.auto_min_confidence}% · today PnL ${j.today_pnl.toFixed(2)} USDT`;
     const okT = SET.market==='futures' ? k.futures_order_test_ok : k.order_test_ok;
@@ -193,7 +241,9 @@ async function loadSet(){
 }
 async function saveSet(){
   try { await api('/api/settings', {method:'POST', body: JSON.stringify({timeframe:SSTF, market:sMkt.value, leverage:+sLev.value, order_size_usdt:+sOrder.value, max_open_positions:+sMax.value, daily_loss_limit_usdt:+sLoss.value,
-    auto_min_confidence:+sConf.value, atr_sl_mult:+sSl.value, atr_tp_mult:+sTp.value, alerts:sAl.checked, alert_threshold:+sAlT.value})}); alertMsg('Settings saved'); loadSet() } catch(e){ alertMsg('❌ '+e.message) }
+    auto_min_confidence:+sConf.value, atr_sl_mult:+sSl.value, atr_tp_mult:+sTp.value, alerts:sAl.checked, alert_threshold:+sAlT.value,
+    max_trades_per_day:+sDay.value, trailing:sTr.checked, be_trigger_atr:+sBe.value, trail_atr:+sTa.value, alerts_fav_only:sAlF.checked,
+    alert_cooldown_min:+sCd.value, max_alerts_per_min:+sApm.value, liq_filter:sLq.checked, max_funding_pct:+sFr.value, min_qv_musd:+sQv.value})}); alertMsg('Settings saved'); loadSet() } catch(e){ alertMsg('❌ '+e.message) }
 }
 async function toggleAuto(el){
   const on = el.checked;

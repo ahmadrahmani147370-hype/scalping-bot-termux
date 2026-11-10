@@ -23,6 +23,9 @@ Rate limits: weight-tracked REST (~1000 weight/min of the 2400 futures limit), 1
 - **Funding / liquidity filter** (default ON): |funding| > 0.1% or 24h volume < 20M USDT is marked ⚠ and skipped by alerts/auto.
 - **Favorites**: `/fav add SOL`, `/fav remove SOL`, `/fav list`, ☆ star in the Mini App; favorites are pinned to the top.
 
+## Mini App: "Shadow Pulse" design
+Near-black graphite UI with electric-lime LONG, coral-rose SHORT, gold STRONG accents; sticky market-mood ticker, signal cards with confidence rings and Entry/TP/SL chips, bottom tab bar (Live / Strong / History / Stats / PnL / Health / Settings). Vanilla HTML/CSS/JS, respects reduced-motion.
+
 ## v4 features
 - **STRONG confluence**: 1m + 5m + 15m same direction (each >= 60%, configurable) and 1h not opposing. Sorted to the top, 🔥 STRONG badge, `/strong` or `/signals strong`, flagged in alerts.
 - **Live prices** via Binance futures WebSocket `!miniTicker@arr` (`/market/stream` path; spot fallback `data-stream.binance.vision`), ~1 s updates,

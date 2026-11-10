@@ -19,20 +19,20 @@
 .card{margin:10px;border:1px solid #11708a;border-radius:14px;background:var(--panel);overflow:hidden}
 .ch{display:flex;gap:12px;align-items:center;padding:14px}
 .ch h2{margin:0;font:600 15px ui-monospace,Menlo,monospace;letter-spacing:.2px}.ch p{margin:2px 0 0;color:var(--mut);font-size:11.5px}
-table{width:100%;border-collapse:collapse}
-th{font-size:10.5px;color:var(--mut);text-align:left;font-weight:600;letter-spacing:.6px;padding:9px 6px;border-top:1px solid #11708a;border-bottom:1px solid #11708a}
+table{width:100%;border-collapse:collapse;table-layout:auto}.card{overflow-x:hidden}
+th{font-size:10px;color:var(--mut);text-align:left;font-weight:600;letter-spacing:.4px;padding:9px 4px;border-top:1px solid #11708a;border-bottom:1px solid #11708a}
 th.r,td.r{text-align:right}th.c,td.c{text-align:center}
-td{padding:11px 6px;border-bottom:1px solid #11506a;vertical-align:middle}
+td{padding:10px 4px;border-bottom:1px solid #11506a;vertical-align:middle}
 tr.det td{padding:0 10px 12px;border-bottom:1px solid #11506a}
 .asset{display:flex;gap:8px;align-items:center}.ai{width:14px;font-weight:700;font-size:12px;text-align:center}
 .sym{font-weight:600}.nm{color:var(--mut);font-size:11px}
 .sig{font-weight:700;font-size:12.5px;display:flex;align-items:center;gap:4px;white-space:nowrap}
 .BUY{color:var(--green)}.SELL{color:var(--red)}.HOLD{color:var(--amber)}
 .strong{display:inline-block;margin-top:3px;font-size:9.5px;padding:1px 5px;border-radius:5px;background:#0e3a48;color:var(--cyan);font-weight:700}
-.cf{display:flex;align-items:center;gap:6px}.bar{width:38px;height:5px;border-radius:3px;background:#2a3344;overflow:hidden}
+.cf{display:flex;align-items:center;gap:6px}.bar{width:30px;height:5px;border-radius:3px;background:#2a3344;overflow:hidden}
 .bar i{display:block;height:100%;border-radius:3px}.pct{font-weight:600;font-size:12.5px}
-.px{font-weight:700;font-size:13.5px}.chg{font-size:11px}.up{color:var(--green)}.dn{color:var(--red)}
-.ex{border:0;border-radius:999px;padding:7px 12px;font-weight:700;font-size:12px;color:#fff;cursor:pointer;white-space:nowrap}
+.px{font-weight:700;font-size:12.5px}.chg{font-size:11px}.up{color:var(--green)}.dn{color:var(--red)}
+.ex{border:0;border-radius:999px;padding:6px 8px;font-weight:700;font-size:11px;color:#fff;cursor:pointer;white-space:nowrap}
 .ex.BUY{background:var(--green);color:#fff}.ex.SELL{background:var(--red);color:#fff}.exh{color:#6b778a;font-weight:600;font-size:12px}
 .lv{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin:4px 0 8px}.lv div{background:#0f1522;border:1px solid var(--line);border-radius:8px;padding:6px}
 .lv b{display:block;font-size:12.5px}.lv span{font-size:10px;color:var(--mut)}
@@ -46,6 +46,17 @@ tr.det td{padding:0 10px 12px;border-bottom:1px solid #11506a}
 .kv{font-size:12px;color:var(--mut);padding:0 14px 12px}.kv b{color:var(--txt)}
 .sw{position:relative;width:44px;height:24px}.sw input{opacity:0;width:0;height:0}.sw i{position:absolute;inset:0;background:#2a3344;border-radius:99px;transition:.2s}
 .sw i:before{content:"";position:absolute;left:3px;top:3px;width:18px;height:18px;border-radius:50%;background:#fff;transition:.2s}.sw input:checked+i{background:var(--cyan)}.sw input:checked+i:before{transform:translateX(20px)}
+.tools{display:flex;gap:6px;padding:0 12px 10px;flex-wrap:wrap;align-items:center}
+.chip{padding:6px 11px;border-radius:999px;border:1px solid var(--line);background:#141b2a;color:#cfd6e2;font-size:12px;font-weight:600;cursor:pointer}
+.chip.on{background:#0e3a48;color:var(--cyan);border-color:#11708a}
+.search{flex:1;min-width:110px;background:#0f1522;border:1px solid var(--line);color:var(--txt);border-radius:9px;padding:7px 10px;font-size:13px}
+.stats{padding:0 14px 10px;color:var(--mut);font-size:11.5px}.stats b{color:var(--txt)}
+tr.hotrow td{background:rgba(19,200,240,.07)}tr.hotrow td:first-child{box-shadow:inset 3px 0 0 var(--cyan)}
+.hotb{display:inline-block;margin-left:4px;font-size:9.5px;padding:1px 5px;border-radius:5px;background:#3a2a07;color:#fbbf24;font-weight:700}
+.more{display:block;margin:10px auto;padding:9px 18px;border-radius:10px;border:1px solid #11708a;background:#0e3a48;color:var(--cyan);font-weight:700;cursor:pointer}
+.LONG{color:var(--green)}.SHORT{color:var(--red)}.NEUTRAL{color:var(--grey)}.ex.LONG{background:var(--green);color:#fff}.ex.SHORT{background:var(--red);color:#fff}
+.form select{background:#0f1522;border:1px solid var(--line);color:var(--txt);border-radius:7px;padding:6px}
+.note{font-size:10.5px;color:#fbbf24;margin-top:6px}
 .warn{margin:0 14px 12px;padding:10px;border-radius:9px;background:#2a1d0b;color:#fbbf24;font-size:12px}
 </style></head><body>
 <div class="top">
@@ -68,15 +79,17 @@ tr.det td{padding:0 10px 12px;border-bottom:1px solid #11506a}
   </div>
   <div class="card">
     <div class="ch"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#13c8f0" stroke-width="2"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>
-      <div><h2>Signals · All Assets <span id="tfLbl" style="color:var(--cyan)"></span></h2><p>Indicator analysis for all 10 supported cryptos · tap a row for entry / TP / SL</p></div></div>
-    <table><thead><tr><th style="padding-left:12px">ASSET</th><th>SIGNAL</th><th>CONFIDENCE</th><th class="r">PRICE</th><th class="c">EXECUTE</th></tr></thead>
-      <tbody id="rows"><tr><td colspan="5" class="msg">Loading signals…</td></tr></tbody></table>
-    <div class="foot"><span>✧ Powered by Indicator analysis</span><span><span class="dot"></span><span id="upd">Live updates every 12s</span></span></div>
+      <div><h2>Scalping Scanner <span id="tfLbl" style="color:var(--cyan)"></span></h2><p>Top 200 Binance USDT-M futures by volume · tap a row for entry / TP / SL and indicator details</p></div></div>
+    <div class="tools"><button class="chip on" data-f="all">All</button><button class="chip" data-f="hot">80%+</button><button class="chip" data-f="LONG">Long</button><button class="chip" data-f="SHORT">Short</button><input class="search" id="q" placeholder="Search coin…" autocomplete="off"></div>
+    <div class="stats" id="stats"></div>
+    <table><thead><tr><th style="padding-left:12px">ASSET</th><th>SIGNAL</th><th>CONFIDENCE</th><th class="r">PRICE</th><th class="c">TRADE</th></tr></thead>
+      <tbody id="rows"><tr><td colspan="5" class="msg">Loading signals… (first scan of 200 coins takes ~30s)</td></tr></tbody></table><button class="more hide" id="moreBtn" onclick="PAGE+=50;render()">Show more</button>
+    <div class="foot"><span>✧ Indicator confidence, not win probability</span><span><span class="dot"></span><span id="upd">Live updates every 15s</span></span></div>
   </div>
 </div>
 
 <div id="vHist" class="hide">
-  <div class="card"><div class="ch"><div><h2>Signals History</h2><p>New BUY/SELL signals across 1m / 5m / 15m</p></div></div><div class="list" id="hSig"></div></div>
+  <div class="card"><div class="ch"><div><h2>Signals History</h2><p>Coins that reached 80%+ LONG/SHORT on 1m / 5m / 15m</p></div></div><div class="list" id="hSig"></div></div>
   <div class="card"><div class="ch"><div><h2>Trade History</h2><p>Manual and auto trades</p></div></div><div class="list" id="hTr"></div></div>
 </div>
 
@@ -84,14 +97,16 @@ tr.det td{padding:0 10px 12px;border-bottom:1px solid #11506a}
   <div class="ch"><div><h2>Settings</h2><p>Risk controls apply to manual and auto trades</p></div></div>
   <div class="form">
     <label>Auto Trade timeframe <div class="seg" id="segS"><button data-tf="1m">1m</button><button data-tf="5m">5m</button><button data-tf="15m">15m</button></div></label>
-    <label>Order size (USDT)<input type="number" id="sOrder" min="5" step="1"></label>
+    <label>Market<select id="sMkt"><option value="futures">Futures (Long + Short)</option><option value="spot">Spot (Long only)</option></select></label>
+    <label>Leverage (futures, isolated)<input type="number" id="sLev" min="1" max="10" step="1"></label>
+    <label>Order margin (USDT)<input type="number" id="sOrder" min="5" step="1"></label>
     <label>Max open positions<input type="number" id="sMax" min="1" max="10"></label>
     <label>Daily loss limit (USDT)<input type="number" id="sLoss" min="0.5" step="0.5"></label>
-    <label>Auto min confidence (%)<input type="number" id="sConf" min="50" max="100"></label>
+    <label>Auto min confidence (%)<input type="number" id="sConf" min="80" max="99"></label>
     <label>Stop-loss (× ATR)<input type="number" id="sSl" min="0.3" step="0.1"></label>
     <label>Take-profit (× ATR)<input type="number" id="sTp" min="0.3" step="0.1"></label>
     <label>Telegram alerts<label class="sw" style="border:0;padding:0"><input type="checkbox" id="sAl"><i></i></label></label>
-    <label>Alert threshold (%)<input type="number" id="sAlT" min="50" max="100"></label>
+    <label>Alert threshold (%)<input type="number" id="sAlT" min="80" max="99"></label>
     <button class="btn" onclick="saveSet()">Save settings</button>
   </div><div class="kv" id="keyInfo"></div>
 </div></div>
@@ -115,29 +130,44 @@ segInit(seg, TF, tf => { TF = tf; localStorage.setItem('tf', tf); load() });
 const ic = {BUY:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="M8 12l4-4 4 4M12 8v8"/></svg>',
  SELL:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="M8 12l4 4 4-4M12 8v8"/></svg>',
  HOLD:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="M8 12h8"/></svg>'};
+let FILTER='all', PAGE=50, DETAIL={};
+document.querySelectorAll('.chip').forEach(c=>c.onclick=()=>{document.querySelectorAll('.chip').forEach(x=>x.classList.remove('on'));c.classList.add('on');FILTER=c.dataset.f;PAGE=50;render()});
+q.oninput=()=>{PAGE=50;render()};
+const colOf = s => { let h=0; for (const ch of s) h=(h*31+ch.charCodeAt(0))%360; return `hsl(${h},70%,62%)` };
+const ICN = {LONG:ic.BUY, SHORT:ic.SELL, NEUTRAL:ic.HOLD};
+const fmtVol = v => v>=1e9?(v/1e9).toFixed(1)+'B':v>=1e6?(v/1e6).toFixed(0)+'M':(v/1e3).toFixed(0)+'K';
+function rowsFiltered(){ const qq=q.value.trim().toUpperCase(); return DATA.filter(s=>(FILTER==='all'||(FILTER==='hot'&&s.hot)||s.signal===FILTER)&&(!qq||s.symbol.includes(qq))) }
 function render(){
-  tfLbl.textContent = '· ' + TF;
-  rows.innerHTML = DATA.map(s => {
-    const barC = s.confidence >= 60 ? '#f59e0b' : s.confidence >= 50 ? '#f59e0b' : '#94a3b8';
+  tfLbl.textContent = '· ' + TF; const list = rowsFiltered(); const shown = list.slice(0, PAGE);
+  moreBtn.classList.toggle('hide', list.length <= PAGE); moreBtn.textContent = `Show more (${list.length-PAGE} left)`;
+  if (!shown.length) { rows.innerHTML = `<tr><td colspan="5" class="msg">${FILTER==='hot'?'No 80%+ setups right now on '+TF+'. Try another timeframe.':'No coins match.'}</td></tr>`; return }
+  rows.innerHTML = shown.map(s => {
+    const barC = s.confidence >= 80 ? '#13c8f0' : s.confidence >= 60 ? '#f59e0b' : '#94a3b8';
     const ch = s.change24h == null ? '' : `<div class="chg ${s.change24h>=0?'up':'dn'}">${s.change24h>=0?'↗ +':'↘ '}${s.change24h.toFixed(2)}%</div>`;
-    const ex = s.signal==='HOLD' ? '<span class="exh">HOLD</span>' : `<button class="ex ${s.signal}" onclick="event.stopPropagation();trade('${s.symbol}','${s.signal}')">${s.signal==='BUY'?'↗':'↘'} ${s.signal}</button>`;
+    const ex = s.signal==='NEUTRAL' ? '<span class="exh">—</span>' : `<button class="ex ${s.signal}" onclick="event.stopPropagation();trade('${s.symbol}','${s.signal}')">${s.signal}</button>`;
+    const d = DETAIL[s.symbol];
     const det = OPEN[s.symbol] ? `<tr class="det"><td colspan="5"><div class="lv"><div><span>Entry</span><b>${s.entry}</b></div><div><span>Take-profit</span><b class="up">${s.tp}</b></div><div><span>Stop-loss</span><b class="dn">${s.sl}</b></div></div>
-      <div class="ind">${s.indicators.map(i=>`<span class="${i.vote>0?'up':i.vote<0?'dn':''}">${i.name}: ${i.detail}</span>`).join('')}<span>1m ${s.others['1m']} · 5m ${s.others['5m']} · 15m ${s.others['15m']}</span></div></td></tr>` : '';
-    return `<tr onclick="OPEN['${s.symbol}']=!OPEN['${s.symbol}'];render()"><td style="padding-left:12px"><div class="asset"><span class="ai" style="color:${COL[s.symbol]}">${s.symbol[0]}</span><div><div class="sym">${s.symbol}</div><div class="nm">${s.name}</div></div></div></td>
-      <td><div class="sig ${s.signal}">${ic[s.signal]} ${s.signal}</div>${s.strong?'<span class="strong">⚡ STRONG</span>':''}</td>
+      ${d ? `<div class="ind">${d.indicators.map(i=>`<span class="${i.vote>0?'up':i.vote<0?'dn':''}">${i.name}: ${i.detail}</span>`).join('')}<span>ATR ${d.atr_pct}%</span><span>1m ${d.others['1m']} · 5m ${d.others['5m']} · 15m ${d.others['15m']}</span></div>${d.notes.length?`<div class="note">⚠ ${d.notes.join(' · ')}</div>`:''}` : '<div class="ind"><span>Loading details…</span></div>'}</td></tr>` : '';
+    const base = s.base.length > 9 ? s.base.slice(0,9)+'…' : s.base;
+    return `<tr class="${s.hot?'hotrow':''}" onclick="toggle('${s.symbol}')"><td style="padding-left:12px"><div class="asset"><span class="ai" style="color:${colOf(s.base)}">${[...s.base][0]}</span><div><div class="sym">${base}</div><div class="nm">Vol ${fmtVol(s.qv||0)}</div></div></div></td>
+      <td><div class="sig ${s.signal}">${ICN[s.signal]} ${s.signal==='NEUTRAL'?'NEUT':s.signal}</div>${s.strong?'<span class="strong">⚡ MTF</span>':''}${s.hot?'<span class="hotb">80%+</span>':''}</td>
       <td><div class="cf"><div class="bar"><i style="width:${s.confidence}%;background:${barC}"></i></div><span class="pct">${s.confidence}%</span></div></td>
-      <td class="r"><div class="px">$${Number(s.price).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:8})}</div>${ch}</td><td class="c">${ex}</td></tr>${det}`;
+      <td class="r"><div class="px">$${s.price}</div>${ch}</td><td class="c">${ex}</td></tr>${det}`;
   }).join('');
 }
+async function toggle(sym){ OPEN[sym]=!OPEN[sym]; render(); if (OPEN[sym]) { try { DETAIL[sym] = await api(`/api/signal?tf=${TF}&symbol=${sym}`); render() } catch(e){} } }
 async function load(){
   if (!INIT) { rows.innerHTML = '<tr><td colspan="5" class="msg">Please open this app from the Telegram bot.</td></tr>'; return }
-  try { const j = await api('/api/signals?tf='+TF); DATA = j.signals; render();
+  try { const j = await api('/api/signals?tf='+TF); DATA = j.signals; DETAIL = {}; render();
+    for (const s in OPEN) if (OPEN[s]) api(`/api/signal?tf=${TF}&symbol=${s}`).then(d=>{DETAIL[s]=d;render()}).catch(()=>{});
+    stats.innerHTML = `<b>${j.count}</b> coins (${j.source}) · <b class="up">${j.long}</b> long · <b class="dn">${j.short}</b> short · <b style="color:var(--cyan)">${j.hot}</b> at 80%+`;
     upd.textContent = 'Updated ' + new Date(j.updated*1000).toLocaleTimeString() + ' · every ' + j.refresh_sec + 's';
   } catch(e) { rows.innerHTML = `<tr><td colspan="5" class="msg">${e.message}</td></tr>` }
 }
 async function trade(sym, side){
-  const s = DATA.find(x=>x.symbol===sym); const size = SET ? SET.order_size_usdt : 10;
-  const txt = side==='BUY' ? `BUY ${sym}/USDT with ${size} USDT at market?\nTP ${s.tp} · SL ${s.sl} (OCO)` : `SELL ${sym}/USDT at market (closes position / sells free ${sym})?`;
+  const s = DATA.find(x=>x.symbol===sym); const st = SET || {order_size_usdt:10, market:'futures', leverage:3};
+  if (st.market==='spot' && side==='SHORT') { alertMsg('Shorts need Futures mode (Settings > Market).'); return }
+  const txt = `${side} ${sym} at market?\n${st.market.toUpperCase()}${st.market==='futures'?` ${st.leverage}x isolated`:''} · margin ${st.order_size_usdt} USDT\nTP ${s.tp} · SL ${s.sl}`;
   if (!(await confirmMsg(txt))) return;
   try { const r = await api('/api/trade', {method:'POST', body: JSON.stringify({symbol:sym, side, confirm:true})}); alertMsg(r.ok ? '✅ '+r.msg : '❌ '+r.error) } catch(e){ alertMsg('❌ '+e.message) }
 }
@@ -145,29 +175,30 @@ const fmtT = t => new Date(t*1000).toLocaleString([], {month:'short',day:'numeri
 async function loadHist(){
   try { const j = await api('/api/history');
     hSig.innerHTML = j.signals.map(s=>`<div class="it"><div><b class="${s.signal}">${s.signal}</b> ${s.symbol} <small>${s.tf}${s.strong?' ⚡':''} · ${s.confidence}%</small><br><small>E ${(+s.entry).toPrecision(6)} · TP ${(+s.tp).toPrecision(6)} · SL ${(+s.sl).toPrecision(6)}</small></div><small>${fmtT(s.ts)}</small></div>`).join('') || '<div class="msg">No signals recorded yet.</div>';
-    hTr.innerHTML = j.trades.map(t=>`<div class="it"><div><b class="${t.side}">${t.side}</b> ${t.symbol} <small>${t.mode} · ${t.status}</small><br><small>${t.price?('@ '+(+t.price).toPrecision(6)):''} ${t.pnl!=null?('PnL '+t.pnl.toFixed(3)):''} ${t.error||''}</small></div><small>${fmtT(t.ts)}</small></div>`).join('') || '<div class="msg">No trades yet.</div>';
+    hTr.innerHTML = j.trades.map(t=>`<div class="it"><div><b class="${t.side}">${t.side}</b> ${t.symbol} <small>${t.market||'spot'}${t.leverage>1?' '+t.leverage+'x':''} · ${t.mode} · ${t.status}</small><br><small>${t.price?('@ '+(+t.price).toPrecision(6)):''} ${t.pnl!=null?('PnL '+t.pnl.toFixed(3)):''} ${t.error||''}</small></div><small>${fmtT(t.ts)}</small></div>`).join('') || '<div class="msg">No trades yet.</div>';
   } catch(e){ hSig.innerHTML = `<div class="msg">${e.message}</div>` }
 }
 async function loadSet(){
   try { const j = await api('/api/settings'); SET = j.settings; SSTF = SET.timeframe;
     segInit(segS, SSTF, tf => SSTF = tf);
-    sOrder.value = SET.order_size_usdt; sMax.value = SET.max_open_positions; sLoss.value = SET.daily_loss_limit_usdt; sConf.value = SET.auto_min_confidence;
+    sOrder.value = SET.order_size_usdt; sMkt.value = SET.market; sLev.value = SET.leverage; sMax.value = SET.max_open_positions; sLoss.value = SET.daily_loss_limit_usdt; sConf.value = SET.auto_min_confidence;
     sSl.value = SET.atr_sl_mult; sTp.value = SET.atr_tp_mult; sAl.checked = SET.alerts; sAlT.value = SET.alert_threshold;
     autoSw.checked = SET.auto_trade; const k = j.key;
-    autoInfo.textContent = `${SET.auto_trade?'ON':'OFF'} · ${SET.timeframe} · ${SET.order_size_usdt} USDT/trade · min conf ${SET.auto_min_confidence}% · today PnL ${j.today_pnl.toFixed(2)} USDT`;
-    keyWarn.innerHTML = k.order_test_ok ? '' : '<div class="warn">⚠️ Your Binance API key has no Spot trading permission, so orders will be rejected. Enable "Spot & Margin Trading" on the key (keep withdrawals OFF).</div>';
-    posList.innerHTML = j.open_positions.map(p=>`<div class="it"><div><b class="BUY">OPEN</b> ${p.symbol} <small>${p.qty} @ ${(+p.price).toPrecision(6)}</small></div><small>TP ${(+p.tp).toPrecision(6)} / SL ${(+p.sl).toPrecision(6)}</small></div>`).join('') || '<div class="it"><small>No open positions</small></div>';
-    keyInfo.innerHTML = `Binance key — read: <b>${k.account_ok?'OK':'FAIL'}</b> · spot trading: <b>${k.spot_trading_enabled?'ENABLED':'DISABLED'}</b> · withdrawals: <b>${k.withdrawals_enabled?'ENABLED ⚠️':'disabled'}</b> · IP restricted: <b>${k.ip_restricted?'yes':'no'}</b>`;
+    autoInfo.textContent = `${SET.auto_trade?'ON':'OFF'} · ${SET.market}${SET.market==='futures'?' '+SET.leverage+'x':''} · ${SET.timeframe} · ${SET.order_size_usdt} USDT/trade · min conf ${SET.auto_min_confidence}% · today PnL ${j.today_pnl.toFixed(2)} USDT`;
+    const okT = SET.market==='futures' ? k.futures_order_test_ok : k.order_test_ok;
+    keyWarn.innerHTML = okT ? '' : `<div class="warn">⚠️ Your Binance API key has no ${SET.market==='futures'?'Futures':'Spot'} trading permission, so orders will be rejected. Enable ${SET.market==='futures'?'"Enable Futures"':'"Spot & Margin Trading"'} on the key (keep withdrawals OFF).</div>`;
+    posList.innerHTML = j.open_positions.map(p=>`<div class="it"><div><b class="${p.side}">${p.side}</b> ${p.symbol} <small>${p.qty} @ ${(+p.price).toPrecision(6)}</small></div><small>TP ${(+p.tp).toPrecision(6)} / SL ${(+p.sl).toPrecision(6)}</small></div>`).join('') || '<div class="it"><small>No open positions</small></div>';
+    keyInfo.innerHTML = `Binance key — read: <b>${k.account_ok?'OK':'FAIL'}</b> · spot trading: <b>${k.spot_trading_enabled?'ENABLED':'DISABLED'}</b> · futures: <b>${k.futures_enabled?'ENABLED':'DISABLED'}</b> · withdrawals: <b>${k.withdrawals_enabled?'ENABLED ⚠️':'disabled'}</b> · IP restricted: <b>${k.ip_restricted?'yes':'no'}</b>`;
   } catch(e){ autoInfo.textContent = e.message }
 }
 async function saveSet(){
-  try { await api('/api/settings', {method:'POST', body: JSON.stringify({timeframe:SSTF, order_size_usdt:+sOrder.value, max_open_positions:+sMax.value, daily_loss_limit_usdt:+sLoss.value,
+  try { await api('/api/settings', {method:'POST', body: JSON.stringify({timeframe:SSTF, market:sMkt.value, leverage:+sLev.value, order_size_usdt:+sOrder.value, max_open_positions:+sMax.value, daily_loss_limit_usdt:+sLoss.value,
     auto_min_confidence:+sConf.value, atr_sl_mult:+sSl.value, atr_tp_mult:+sTp.value, alerts:sAl.checked, alert_threshold:+sAlT.value})}); alertMsg('Settings saved'); loadSet() } catch(e){ alertMsg('❌ '+e.message) }
 }
 async function toggleAuto(el){
   const on = el.checked;
-  if (on && !(await confirmMsg(`Enable Auto Trade on ${SET?SET.timeframe:''}? The bot will place real market orders (${SET?SET.order_size_usdt:10} USDT each) with TP/SL.`))) { el.checked = false; return }
+  if (on && !(await confirmMsg(`Enable Auto Trade on ${SET?SET.timeframe:''}? The bot will place real ${SET?SET.market:''} market orders (${SET?SET.order_size_usdt:10} USDT margin${SET&&SET.market==='futures'?', '+SET.leverage+'x':''}) on 80%+ signals with TP/SL.`))) { el.checked = false; return }
   try { await api('/api/settings', {method:'POST', body: JSON.stringify({auto_trade:on})}); loadSet() } catch(e){ el.checked = !on; alertMsg('❌ '+e.message) }
 }
-load(); loadSet(); setInterval(load, 12000);
+load(); loadSet(); setInterval(load, 15000);
 </script></body></html>

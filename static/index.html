@@ -7,7 +7,8 @@
 :root{--bg:#0b0f1a;--panel:#121826;--line:#1d2a3d;--cyan:#13c8f0;--txt:#e8edf5;--mut:#8592a6;--green:#22c55e;--red:#ef4444;--amber:#f59e0b;--grey:#94a3b8}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--txt);font:14px/1.35 -apple-system,Segoe UI,Roboto,Inter,sans-serif}
 .top{display:flex;align-items:center;gap:6px;padding:10px;border-bottom:1px solid #0e4a5c;background:#0d1220}
-.tab{display:flex;align-items:center;gap:6px;padding:9px 12px;border-radius:9px;color:var(--txt);background:none;border:0;font-weight:500;font-size:13px;cursor:pointer}
+.tab{display:flex;align-items:center;gap:4px;padding:8px 8px;border-radius:9px;color:var(--txt);background:none;border:0;font-weight:500;font-size:12px;cursor:pointer;white-space:nowrap}
+.top{overflow-x:auto}
 .tab.on{background:var(--cyan);color:#04202a;font-weight:600}.sp{flex:1}
 .gear{background:none;border:0;color:var(--txt);display:flex;gap:5px;align-items:center;font-size:13px;cursor:pointer;padding:8px}
 .row2{display:flex;gap:8px;padding:12px 10px 4px;align-items:center;flex-wrap:wrap}
@@ -64,17 +65,26 @@ tr.filt td{opacity:.6}.sec{padding:10px 14px 4px;color:var(--cyan);font:600 12px
 .grid b{display:block;font-size:16px}.grid span{font-size:10px;color:var(--mut)}
 .st{width:100%;border-collapse:collapse;font-size:12px}.st td,.st th{padding:7px 14px;border-bottom:1px solid var(--line)}.st th{border-top:0}
 .riskbox{margin:0 14px 10px;padding:10px;border-radius:9px;background:#0f1522;border:1px solid var(--line);font-size:12px}
+.stg{display:inline-block;white-space:nowrap;margin-top:3px;font-size:9.5px;padding:1px 5px;border-radius:5px;background:linear-gradient(90deg,#7c2d12,#b45309);color:#fde68a;font-weight:800;letter-spacing:.3px}
+.stl{display:inline-block;margin-left:4px;font-size:9.5px;padding:1px 5px;border-radius:5px;background:#3b1220;color:#fca5a5;font-weight:700}
+.mood{margin:10px 14px 0;padding:10px 12px;border-radius:12px;border:1px solid #0e4a5c;background:linear-gradient(180deg,#0f1a2b,#0d1424);display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;font-size:12px}
+.mood .ml{font:700 13px ui-monospace,Menlo,monospace;padding:3px 8px;border-radius:7px}.ml.BULLISH{background:#0b3b2a;color:var(--green)}.ml.BEARISH{background:#3b1220;color:var(--red)}.ml.MIXED{background:#1e293b;color:#cbd5e1}
+.mbar{flex:1 1 100%;height:7px;border-radius:5px;background:#334155;overflow:hidden;display:flex}.mbar i{display:block;height:100%}
+.ok{color:var(--green)}.bad{color:var(--red)}.wrn{color:#fbbf24}
 .warn{margin:0 14px 12px;padding:10px;border-radius:9px;background:#2a1d0b;color:#fbbf24;font-size:12px}
 </style></head><body>
 <div class="top">
   <button class="tab on" id="tLive" onclick="view('live')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>Live</button>
   <button class="tab" id="tHist" onclick="view('hist')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l3 2"/></svg>History</button>
   <button class="tab" id="tStat" onclick="view('stat')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>Stats</button>
+  <button class="tab" id="tPnl" onclick="view('pnl')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M17 6H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>PnL</button>
+  <button class="tab" id="tHea" onclick="view('hea')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>Health</button>
   <div class="sp"></div>
   <button class="gear" onclick="view('set')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
 </div>
 
 <div id="vLive">
+  <div class="mood" id="mood"><span class="ml MIXED">MOOD …</span></div>
   <div class="row2">
     <button class="pill on" id="pMan" onclick="mode('man')">Manual Trade</button>
     <button class="pill" id="pAuto" onclick="mode('auto')">Auto Trade</button>
@@ -88,7 +98,7 @@ tr.filt td{opacity:.6}.sec{padding:10px 14px 4px;color:var(--cyan);font:600 12px
   <div class="card">
     <div class="ch"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#13c8f0" stroke-width="2"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>
       <div><h2>Scalping Scanner <span id="tfLbl" style="color:var(--cyan)"></span></h2><p>Top 200 Binance USDT-M futures by volume · tap a row for entry / TP / SL and indicator details</p></div></div>
-    <div class="tools"><button class="chip on" data-f="all">All</button><button class="chip" data-f="hot">80%+</button><button class="chip" data-f="LONG">Long</button><button class="chip" data-f="SHORT">Short</button><button class="chip" data-f="fav">★ Fav</button><input class="search" id="q" placeholder="Search coin…" autocomplete="off"></div>
+    <div class="tools"><button class="chip on" data-f="all">All</button><button class="chip" data-f="hot">80%+</button><button class="chip" data-f="LONG">Long</button><button class="chip" data-f="SHORT">Short</button><button class="chip" data-f="strong">🔥 Strong</button><button class="chip" data-f="fav">★ Fav</button><input class="search" id="q" placeholder="Search coin…" autocomplete="off"></div>
     <div class="stats" id="stats"></div>
     <table><thead><tr><th style="padding-left:12px">ASSET</th><th>SIGNAL</th><th>CONFIDENCE</th><th class="r">PRICE</th><th class="c">TRADE</th></tr></thead>
       <tbody id="rows"><tr><td colspan="5" class="msg">Loading signals… (first scan of 200 coins takes ~30s)</td></tr></tbody></table><button class="more hide" id="moreBtn" onclick="PAGE+=50;render()">Show more</button>
@@ -106,6 +116,20 @@ tr.filt td{opacity:.6}.sec{padding:10px 14px 4px;color:var(--cyan);font:600 12px
     <div><h2>Paper Win-Rate</h2><p>Har 80%+ signal paper par track hota hai: TP hit / SL hit / 60 candles ke baad expired. PAPER results, real trades nahi.</p></div></div>
     <div id="statBody"><div class="msg">Loading…</div></div></div>
   <div class="card"><div class="ch"><div><h2>Recent Paper Signals</h2><p>Latest 60</p></div></div><div class="list" id="paperList"></div></div>
+</div>
+
+<div id="vPnl" class="hide">
+  <div class="card"><div class="ch"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#13c8f0" stroke-width="2"><path d="M12 2v20M17 6H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+    <div><h2>PnL Dashboard</h2><p>Realized + unrealized (USDT) from bot trade history; Binance futures income when available</p></div></div>
+    <div id="pnlBody"><div class="msg">Loading…</div></div></div>
+  <div class="card"><div class="ch"><div><h2>Open Positions</h2><p>Unrealized at live price</p></div></div><div class="list" id="pnlOpen"></div></div>
+  <div class="card"><div class="ch"><div><h2>Closed Trades</h2><p>Latest 40</p></div></div><div class="list" id="pnlClosed"></div></div>
+</div>
+
+<div id="vHea" class="hide">
+  <div class="card"><div class="ch"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#13c8f0" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+    <div><h2>Health Monitor</h2><p>Data freshness per timeframe, WebSocket, rate limits, self-healing tasks</p></div></div>
+    <div id="heaBody"><div class="msg">Loading…</div></div></div>
 </div>
 
 <div id="vSet" class="hide"><div class="card">
@@ -132,6 +156,11 @@ tr.filt td{opacity:.6}.sec{padding:10px 14px 4px;color:var(--cyan);font:600 12px
     <label>Favorites only<label class="sw" style="border:0;padding:0"><input type="checkbox" id="sAlF"><i></i></label></label>
     <label>Cooldown (min, per coin+tf+side)<input type="number" id="sCd" min="1" max="240"></label>
     <label>Max alerts per minute<input type="number" id="sApm" min="1" max="30"></label>
+    <label>STRONG: min confidence each TF (%)<input type="number" id="sSc" min="50" max="95"></label>
+    <div class="sec">BTC SUDDEN-MOVE GUARD</div>
+    <label>Pause on BTC 5m move<label class="sw" style="border:0;padding:0"><input type="checkbox" id="sBg"><i></i></label></label>
+    <label>BTC move trigger (%)<input type="number" id="sBp" min="0.2" max="10" step="0.1"></label>
+    <label>Pause duration (min)<input type="number" id="sBm" min="1" max="240"></label>
     <div class="sec">FUNDING / LIQUIDITY FILTER</div>
     <label>Filter risky coins<label class="sw" style="border:0;padding:0"><input type="checkbox" id="sLq"><i></i></label></label>
     <label>Max |funding| (%)<input type="number" id="sFr" min="0.01" step="0.01"></label>
@@ -151,9 +180,9 @@ async function api(p, opt={}) {
 }
 function alertMsg(m){ tg && tg.showAlert ? tg.showAlert(m) : alert(m) }
 function confirmMsg(m){ return new Promise(res => tg && tg.showConfirm && tg.initData ? tg.showConfirm(m, res) : res(confirm(m))) }
-function view(v){ const M={live:'vLive',hist:'vHist',stat:'vStat',set:'vSet'};
-  for (const [id,t] of [['vLive','tLive'],['vHist','tHist'],['vStat','tStat'],['vSet',null]]) { document.getElementById(id).classList.toggle('hide', id !== M[v]); if(t) document.getElementById(t).classList.toggle('on', id===M[v]); }
-  if (v==='hist') loadHist(); if (v==='set') loadSet(); if (v==='stat') loadStats(); }
+function view(v){ const M={live:'vLive',hist:'vHist',stat:'vStat',pnl:'vPnl',hea:'vHea',set:'vSet'}; VIEW=v;
+  for (const [id,t] of [['vLive','tLive'],['vHist','tHist'],['vStat','tStat'],['vPnl','tPnl'],['vHea','tHea'],['vSet',null]]) { document.getElementById(id).classList.toggle('hide', id !== M[v]); if(t) document.getElementById(t).classList.toggle('on', id===M[v]); }
+  if (v==='hist') loadHist(); if (v==='set') loadSet(); if (v==='stat') loadStats(); if (v==='pnl') loadPnl(); if (v==='hea') loadHealth(); }
 function mode(m){ pMan.classList.toggle('on', m==='man'); pAuto.classList.toggle('on', m==='auto'); autoCard.classList.toggle('hide', m!=='auto'); if (m==='auto') loadSet(); }
 function segInit(el, cur, cb){ el.querySelectorAll('button').forEach(b=>{ b.classList.toggle('on', b.dataset.tf===cur); b.onclick=()=>{ el.querySelectorAll('button').forEach(x=>x.classList.remove('on')); b.classList.add('on'); cb(b.dataset.tf) } }) }
 segInit(seg, TF, tf => { TF = tf; localStorage.setItem('tf', tf); load() });
@@ -166,7 +195,7 @@ q.oninput=()=>{PAGE=50;render()};
 const colOf = s => { let h=0; for (const ch of s) h=(h*31+ch.charCodeAt(0))%360; return `hsl(${h},70%,62%)` };
 const ICN = {LONG:ic.BUY, SHORT:ic.SELL, NEUTRAL:ic.HOLD};
 const fmtVol = v => v>=1e9?(v/1e9).toFixed(1)+'B':v>=1e6?(v/1e6).toFixed(0)+'M':(v/1e3).toFixed(0)+'K';
-function rowsFiltered(){ const qq=q.value.trim().toUpperCase(); return DATA.filter(s=>(FILTER==='all'||(FILTER==='hot'&&s.hot)||(FILTER==='fav'&&s.fav)||s.signal===FILTER)&&(!qq||s.symbol.includes(qq))) }
+function rowsFiltered(){ const qq=q.value.trim().toUpperCase(); return DATA.filter(s=>(FILTER==='all'||(FILTER==='hot'&&s.hot)||(FILTER==='fav'&&s.fav)||(FILTER==='strong'&&s.confluence)||s.signal===FILTER)&&(!qq||s.symbol.includes(qq))) }
 function render(){
   tfLbl.textContent = '· ' + TF; const list = rowsFiltered(); const shown = list.slice(0, PAGE);
   moreBtn.classList.toggle('hide', list.length <= PAGE); moreBtn.textContent = `Show more (${list.length-PAGE} left)`;
@@ -180,7 +209,7 @@ function render(){
       ${d ? `<div class="ind">${d.indicators.map(i=>`<span class="${i.vote>0?'up':i.vote<0?'dn':''}">${i.name}: ${i.detail}</span>`).join('')}<span>ATR ${d.atr_pct}%</span>${d.funding!=null?`<span>Funding ${d.funding}%</span>`:''}${d.flags.length?`<span class="dn">⚠ ${d.flags.join(', ')}${d.filtered?' (alerts/auto skip)':''}</span>`:''}<span>1m ${d.others['1m']} · 5m ${d.others['5m']} · 15m ${d.others['15m']}</span></div>${d.notes.length?`<div class="note">⚠ ${d.notes.join(' · ')}</div>`:''}` : '<div class="ind"><span>Loading details…</span></div>'}</td></tr>` : '';
     const base = s.base.length > 9 ? s.base.slice(0,9)+'…' : s.base;
     return `<tr class="${s.hot?'hotrow':''} ${s.filtered?'filt':''}" onclick="toggle('${s.symbol}')"><td style="padding-left:8px"><div class="asset"><button class="star ${s.fav?'on':''}" onclick="event.stopPropagation();fav('${s.symbol}',${!s.fav})">${s.fav?'★':'☆'}</button><span class="ai" style="color:${colOf(s.base)}">${[...s.base][0]}</span><div><div class="sym">${base}</div><div class="nm">Vol ${fmtVol(s.qv||0)}</div></div></div></td>
-      <td><div class="sig ${s.signal}">${ICN[s.signal]} ${s.signal==='NEUTRAL'?'NEUT':s.signal}</div>${s.strong?'<span class="strong">⚡ MTF</span>':''}${s.hot?'<span class="hotb">80%+</span>':''}${s.flags&&s.flags.length?`<span class="flag" title="${s.flags.join(', ')}">⚠ ${s.flags[0].split(' ')[0]==='funding'?'funding':'low vol'}</span>`:''}</td>
+      <td><div class="sig ${s.signal}">${ICN[s.signal]} ${s.signal==='NEUTRAL'?'NEUT':s.signal}</div>${s.confluence?'<span class="stg">🔥 STRONG</span>':''}${s.stale?'<span class="stl">⏱ stale</span>':''}${s.paused?'<span class="stl">⏸ BTC</span>':''}${s.hot?'<span class="hotb">80%+</span>':''}${s.flags&&s.flags.length?`<span class="flag" title="${s.flags.join(', ')}">⚠ ${s.flags[0].split(' ')[0]==='funding'?'funding':'low vol'}</span>`:''}</td>
       <td><div class="cf"><div class="bar"><i style="width:${s.confidence}%;background:${barC}"></i></div><span class="pct">${s.confidence}%</span></div></td>
       <td class="r"><div class="px">$${s.price}</div>${ch}</td><td class="c">${ex}</td></tr>${det}`;
   }).join('');
@@ -189,9 +218,10 @@ async function toggle(sym){ OPEN[sym]=!OPEN[sym]; render(); if (OPEN[sym]) { try
 async function load(){
   if (!INIT) { rows.innerHTML = '<tr><td colspan="5" class="msg">Please open this app from the Telegram bot.</td></tr>'; return }
   try { const j = await api('/api/signals?tf='+TF); DATA = j.signals; DETAIL = {}; render();
-    for (const s in OPEN) if (OPEN[s]) api(`/api/signal?tf=${TF}&symbol=${s}`).then(d=>{DETAIL[s]=d;render()}).catch(()=>{});
-    stats.innerHTML = `<b>${j.count}</b> coins (${j.source}) · <b class="up">${j.long}</b> long · <b class="dn">${j.short}</b> short · <b style="color:var(--cyan)">${j.hot}</b> at 80%+`;
-    upd.textContent = 'Updated ' + new Date(j.updated*1000).toLocaleTimeString() + ' · every ' + j.refresh_sec + 's';
+    if (++TICK % 3 === 0) for (const s in OPEN) if (OPEN[s]) api(`/api/signal?tf=${TF}&symbol=${s}`).then(d=>{DETAIL[s]=d;render()}).catch(()=>{});
+    stats.innerHTML = `<b>${j.count}</b> coins (${j.source}) · <b class="up">${j.long}</b> long · <b class="dn">${j.short}</b> short · <b style="color:var(--cyan)">${j.hot}</b> at 80%+ · <b style="color:#fbbf24">${j.strong}</b> 🔥 strong${j.stale?` · <b class="dn">${j.stale}</b> stale`:''}`;
+    upd.textContent = 'Updated ' + new Date(j.updated*1000).toLocaleTimeString() + ' · live price ' + (j.live_src||'…');
+    moodRender(j.mood);
   } catch(e) { rows.innerHTML = `<tr><td colspan="5" class="msg">${e.message}</td></tr>` }
 }
 async function trade(sym, side){
@@ -199,7 +229,7 @@ async function trade(sym, side){
   if (st.market==='spot' && side==='SHORT') { alertMsg('Shorts need Futures mode (Settings > Market).'); return }
   const txt = `${side} ${sym} at market?\n${st.market.toUpperCase()}${st.market==='futures'?` ${st.leverage}x isolated`:''} · margin ${st.order_size_usdt} USDT\nTP ${s.tp} · SL ${s.sl}`;
   if (!(await confirmMsg(txt))) return;
-  try { const r = await api('/api/trade', {method:'POST', body: JSON.stringify({symbol:sym, side, confirm:true})}); alertMsg(r.ok ? '✅ '+r.msg : '❌ '+r.error) } catch(e){ alertMsg('❌ '+e.message) }
+  try { const r = await api('/api/trade', {method:'POST', body: JSON.stringify({symbol:sym, side, tf:TF, confirm:true})}); alertMsg(r.ok ? '✅ '+r.msg : '❌ '+r.error) } catch(e){ alertMsg('❌ '+e.message) }
 }
 const fmtT = t => new Date(t*1000).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
 async function loadHist(){
@@ -223,6 +253,39 @@ async function loadStats(){
   } catch(e){ statBody.innerHTML = `<div class="msg">${e.message}</div>` }
 }
 function riskHtml(rk){ return `Today PnL <b>${rk.today_pnl.toFixed(2)}</b> / -${rk.daily_loss_limit} USDT · open <b>${rk.open}/${rk.max_open}</b> · trades today <b>${rk.trades_today}/${rk.max_trades_per_day}</b><br>${rk.blocked?'<span class="dn">⛔ New trades blocked: '+rk.reasons.join('; ')+'</span>':'<span class="up">✅ New trades allowed</span>'}` }
+let TICK = 0, VIEW = 'live';
+function moodRender(m){ if (!m || !m.tf) return; const t = m.tf[TF] || m.tf['5m']; const b = m.btc || {};
+  const mv = m.btc_move_5m; const p = m.paused || {};
+  mood.innerHTML = `<span class="ml ${m.label}">${m.label==='BULLISH'?'▲':m.label==='BEARISH'?'▼':'◆'} ${m.label}</span>
+    <span>BTC 15m <b class="${(b['15m']||{}).label==='UP'?'up':(b['15m']||{}).label==='DOWN'?'dn':''}">${(b['15m']||{}).label||'…'}</b> · 1h <b class="${(b['1h']||{}).label==='UP'?'up':(b['1h']||{}).label==='DOWN'?'dn':''}">${(b['1h']||{}).label||'…'}</b></span>
+    <span>BTC 5m <b class="${mv>0?'up':mv<0?'dn':''}">${mv==null?'n/a':(mv>0?'+':'')+mv.toFixed(2)+'%'}</b></span>
+    <span>${p.LONG?'<b class="wrn">⏸ LONG paused</b>':p.SHORT?'<b class="wrn">⏸ SHORT paused</b>':'<span class="ok">guard ✓</span>'}</span>
+    <div class="mbar"><i style="width:${t.long_pct}%;background:var(--green)"></i><i style="width:${t.neutral_pct}%;background:#475569"></i><i style="width:${t.short_pct}%;background:var(--red)"></i></div>
+    <span style="color:var(--mut)">${TF}: <b class="up">${t.long_pct}% LONG</b> · <b class="dn">${t.short_pct}% SHORT</b> of ${t.n} coins</span>` }
+const money = v => v==null ? 'n/a' : (v>0?'+':'') + (+v).toFixed(3);
+const cls = v => v>0 ? 'up' : v<0 ? 'dn' : '';
+async function loadPnl(){
+  try { const j = await api('/api/pnl'); let h = '<div class="grid">';
+    for (const [k,l] of [['today','Today'],['7d','7 days'],['all','All time']]) { const a = j[k];
+      h += `<div><b class="${cls(a.realized)}">${money(a.realized)}</b><span>${l} · ${a.wins}W/${a.losses}L${a.win_rate!=null?' · '+a.win_rate+'%':''}</span></div>` }
+    h += `<div><b class="${cls(j.unrealized)}">${money(j.unrealized)}</b><span>unrealized · ${j.open.length} open</span></div></div>`;
+    const ex = j.exchange; h += '<div class="riskbox">' + (ex && ex.ok ? `Binance futures 7d: realized <b class="${cls(ex.realized_7d)}">${money(ex.realized_7d)}</b> · fees <b>${money(ex.fees_7d)}</b> · funding <b>${money(ex.funding_7d)}</b> · net <b class="${cls(ex.net_7d)}">${money(ex.net_7d)}</b>` : `Binance income: n/a${ex&&ex.error?' ('+ex.error.slice(0,70)+')':''}`) + `<br><small style="color:var(--mut)">${j.note}</small></div>`;
+    pnlBody.innerHTML = h;
+    pnlOpen.innerHTML = j.open.map(o=>`<div class="it"><div><b class="${o.side}">${o.side}</b> ${o.symbol} <small>${o.market||''} · qty ${o.qty}</small><br><small>E ${(+o.entry).toPrecision(6)} → ${o.price?(+o.price).toPrecision(6):'n/a'} · TP ${(+o.tp).toPrecision(6)} · SL ${(+o.sl).toPrecision(6)}</small></div><div style="text-align:right"><b class="${cls(o.unrealized)}">${money(o.unrealized)}</b><br><small>${o.roe_pct!=null?o.roe_pct+'% ROE':''}</small></div></div>`).join('') || '<div class="msg">Koi open position nahi.</div>';
+    pnlClosed.innerHTML = j.closed.map(t=>`<div class="it"><div><b class="${t.side}">${t.side}</b> ${t.symbol} <small>${t.mode||''}</small><br><small>${t.entry?(+t.entry).toPrecision(6):''} → ${t.exit?(+t.exit).toPrecision(6):''} · ${(t.reason||'').slice(0,40)}</small></div><div style="text-align:right"><b class="${cls(t.pnl)}">${money(t.pnl)}</b><br><small>${t.closed_ts?fmtT(t.closed_ts):''}</small></div></div>`).join('') || '<div class="msg">Abhi koi closed trade nahi.</div>';
+  } catch(e){ pnlBody.innerHTML = `<div class="msg">${e.message}</div>` }
+}
+const age = x => x==null ? 'n/a' : x < 120 ? Math.round(x)+'s' : (x/60).toFixed(1)+'m';
+async function loadHealth(){
+  try { const h = await api('/api/health'); const w = h.ws, r = h.rate;
+    let x = `<div class="grid"><div><b class="${h.incidents.length?'bad':'ok'}">${h.incidents.length?'⚠ '+h.incidents.length:'✓ OK'}</b><span>incidents</span></div><div><b>${age(h.uptime_s)}</b><span>uptime</span></div><div><b class="${w.status==='connected'?'ok':'bad'}">${w.uptime_pct}%</b><span>WS ${w.status}</span></div><div><b class="${r.hits_429_418?'bad':'ok'}">${r.peak}</b><span>peak weight /${r.limit}</span></div></div>`;
+    x += `<table class="st"><tr><th>TF</th><th>Max age</th><th>Coverage</th><th>Min cov</th><th>Fetch</th><th>Stale</th></tr>` + Object.entries(h.tf).map(([tf,d])=>`<tr><td>${tf}</td><td class="${d.max_age_s>2*d.interval_s?'bad':'ok'}">${age(d.max_age_s)} <small style="color:var(--mut)">/ ${2*d.interval_s}s</small></td><td class="${d.coverage_last>=99?'ok':d.coverage_last>=95?'wrn':'bad'}">${d.coverage_last}%</td><td>${d.coverage_min}%</td><td>${d.fetch_s}s</td><td>${d.stale_signals==null?'-':d.stale_signals}</td></tr>`).join('') + '</table>';
+    x += `<div class="sec">STREAMS & LIMITS</div><div class="riskbox">WebSocket <b class="${w.status==='connected'?'ok':'bad'}">${w.status}</b> · last msg ${age(w.last_msg_age_s)} · reconnects ${w.reconnects} · msgs ${w.msgs}<br>Live price source <b>${h.live_price.source}</b> · fresh ${h.live_price.fresh_coins}/${h.coins}<br>Weight ${r.weight}/${r.limit} (peak ${r.peak}) · 429/418 <b class="${r.hits_429_418?'bad':'ok'}">${r.hits_429_418}</b> · retries ${r.retries} · align retries ${r.align_retries} · requests ${r.requests}<br>Telegram poller <b class="${h.telegram.disabled?'wrn':h.telegram.poll_ok?'ok':'bad'}">${h.telegram.disabled?'disabled (test)':h.telegram.poll_ok?'OK':'FAIL'}</b> · errors ${h.errors.total} · candle gaps ${h.candle_gaps}</div>`;
+    x += `<div class="sec">SELF-HEALING TASKS</div><table class="st"><tr><th>Task</th><th>Alive</th><th>Heartbeat</th><th>Restarts</th></tr>` + Object.entries(h.tasks).map(([n,t])=>`<tr><td>${n}</td><td class="${t.alive?'ok':'bad'}">${t.alive?'✓':'✗'}</td><td>${age(t.hb_age_s)}</td><td>${t.restarts}</td></tr>`).join('') + '</table>';
+    if (h.errors.recent.length) x += `<div class="sec">RECENT ERRORS</div><div class="list">${h.errors.recent.map(e=>`<div class="it"><small>${e.msg}</small><small>${fmtT(e.ts)}</small></div>`).join('')}</div>`;
+    heaBody.innerHTML = x;
+  } catch(e){ heaBody.innerHTML = `<div class="msg">${e.message}</div>` }
+}
 async function loadSet(){
   try { const j = await api('/api/settings'); SET = j.settings; SSTF = SET.timeframe;
     segInit(segS, SSTF, tf => SSTF = tf);
@@ -230,7 +293,7 @@ async function loadSet(){
     sSl.value = SET.atr_sl_mult; sTp.value = SET.atr_tp_mult; sAl.checked = SET.alerts; sAlT.value = String(SET.alert_threshold >= 90 ? 90 : SET.alert_threshold >= 85 ? 85 : 80);
     sDay.value = SET.max_trades_per_day; sTr.checked = SET.trailing; sBe.value = SET.be_trigger_atr; sTa.value = SET.trail_atr;
     sAlF.checked = SET.alerts_fav_only; sCd.value = SET.alert_cooldown_min; sApm.value = SET.max_alerts_per_min;
-    sLq.checked = SET.liq_filter; sFr.value = SET.max_funding_pct; sQv.value = SET.min_qv_musd; riskBox.innerHTML = riskHtml(j.risk);
+    sSc.value = SET.strong_min_conf; sBg.checked = SET.btc_guard; sBp.value = SET.btc_move_pct; sBm.value = SET.btc_pause_min; sLq.checked = SET.liq_filter; sFr.value = SET.max_funding_pct; sQv.value = SET.min_qv_musd; riskBox.innerHTML = riskHtml(j.risk);
     autoSw.checked = SET.auto_trade; const k = j.key;
     autoInfo.textContent = `${SET.auto_trade?'ON':'OFF'} · ${SET.market}${SET.market==='futures'?' '+SET.leverage+'x':''} · ${SET.timeframe} · ${SET.order_size_usdt} USDT/trade · min conf ${SET.auto_min_confidence}% · today PnL ${j.today_pnl.toFixed(2)} USDT`;
     const okT = SET.market==='futures' ? k.futures_order_test_ok : k.order_test_ok;
@@ -243,12 +306,12 @@ async function saveSet(){
   try { await api('/api/settings', {method:'POST', body: JSON.stringify({timeframe:SSTF, market:sMkt.value, leverage:+sLev.value, order_size_usdt:+sOrder.value, max_open_positions:+sMax.value, daily_loss_limit_usdt:+sLoss.value,
     auto_min_confidence:+sConf.value, atr_sl_mult:+sSl.value, atr_tp_mult:+sTp.value, alerts:sAl.checked, alert_threshold:+sAlT.value,
     max_trades_per_day:+sDay.value, trailing:sTr.checked, be_trigger_atr:+sBe.value, trail_atr:+sTa.value, alerts_fav_only:sAlF.checked,
-    alert_cooldown_min:+sCd.value, max_alerts_per_min:+sApm.value, liq_filter:sLq.checked, max_funding_pct:+sFr.value, min_qv_musd:+sQv.value})}); alertMsg('Settings saved'); loadSet() } catch(e){ alertMsg('❌ '+e.message) }
+    alert_cooldown_min:+sCd.value, max_alerts_per_min:+sApm.value, strong_min_conf:+sSc.value, btc_guard:sBg.checked, btc_move_pct:+sBp.value, btc_pause_min:+sBm.value, liq_filter:sLq.checked, max_funding_pct:+sFr.value, min_qv_musd:+sQv.value})}); alertMsg('Settings saved'); loadSet() } catch(e){ alertMsg('❌ '+e.message) }
 }
 async function toggleAuto(el){
   const on = el.checked;
   if (on && !(await confirmMsg(`Enable Auto Trade on ${SET?SET.timeframe:''}? The bot will place real ${SET?SET.market:''} market orders (${SET?SET.order_size_usdt:10} USDT margin${SET&&SET.market==='futures'?', '+SET.leverage+'x':''}) on 80%+ signals with TP/SL.`))) { el.checked = false; return }
   try { await api('/api/settings', {method:'POST', body: JSON.stringify({auto_trade:on})}); loadSet() } catch(e){ el.checked = !on; alertMsg('❌ '+e.message) }
 }
-load(); loadSet(); setInterval(load, 15000);
+load(); loadSet(); setInterval(()=>{ if (VIEW==='live') load(); else if (VIEW==='hea') loadHealth(); else if (VIEW==='pnl') loadPnl(); }, 5000);
 </script></body></html>

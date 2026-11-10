@@ -1,9 +1,9 @@
-"""Scalping bot v2: Starlette backend (pure Python, Termux-friendly) + Telegram bot (long polling)
+"""Scalping bot v4: Starlette backend (pure Python, Termux-friendly) + Telegram bot (long polling)
 + 200-coin multi-timeframe scanner (Binance USDT-M futures, spot fallback) + spot/futures trading.
 Secrets come only from env / .env and are never logged or sent to the frontend."""
 import asyncio, hashlib, hmac, json, logging, os, sqlite3, time, urllib.parse
 from contextlib import asynccontextmanager
-from decimal import Decimal, ROUND_DOWN
+from decimal import Decimal, ROUND_DOWN, ROUND_HALF_UP
 import httpx
 from starlette.applications import Starlette
 from starlette.exceptions import HTTPException
@@ -40,7 +40,13 @@ log = logging.getLogger("scalp")
 
 TFS = ["1m", "5m", "15m"]                 # signal timeframes
 ALL_TFS = ["1m", "5m", "15m", "1h"]        # 1h only used as higher-timeframe confirmation
-FETCH_EVERY = {"1m": 15, "5m": 45, "15m": 90, "1h": 300}   # seconds
+FETCH_EVERY = {"1m": 15, "5m": 60, "15m": 90, "1h": 300}   # seconds; each divides its candle length -> aligned to closes
+CLOSE_LAG = 2.0                            # fetch this many seconds after each aligned boundary (candle close)
+STALE_MULT = 2                             # data older than 2x its refresh interval = stale (no alerts / auto)
+LIVE_MAX_AGE = 10                          # live price older than this falls back to the kline close
+WS_FUT = "wss://fstream.binance.com/market/stream?streams=!miniTicker@arr"
+WS_SPOT = "wss://data-stream.binance.vision/stream?streams=!miniTicker@arr"
+INC_COOLDOWN = 1800                        # one Telegram health alert per incident type per 30 min
 HTF = {"1m": ["5m", "15m"], "5m": ["15m", "1h"], "15m": ["1h"]}
 HOT = 80                                   # "80%+" threshold
 KLINES = 99                                # limit < 100 -> weight 1 on fapi
@@ -53,7 +59,8 @@ DEFAULT_SETTINGS = {"timeframe": "5m", "market": "futures", "leverage": 3, "orde
                     "auto_trade": False, "atr_sl_mult": 1.0, "atr_tp_mult": 1.5,
                     "alerts_fav_only": False, "alert_cooldown_min": 15, "max_alerts_per_min": 10,
                     "max_trades_per_day": 20, "trailing": True, "be_trigger_atr": 0.5, "trail_atr": 1.0,
-                    "liq_filter": True, "max_funding_pct": 0.1, "min_qv_musd": 20.0}
+                    "liq_filter": True, "max_funding_pct": 0.1, "min_qv_musd": 20.0,
+                    "btc_guard": True, "btc_move_pct": 1.0, "btc_pause_min": 15, "strong_min_conf": 60}
 PAPER_EXPIRE = 60                          # paper signals expire after 60 candles of their timeframe
 TF_SEC = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600}
 MAX_LEVERAGE = 10
@@ -117,13 +124,24 @@ def save_settings(upd):
     s["max_trades_per_day"] = max(1, min(s["max_trades_per_day"], 200))
     s["be_trigger_atr"] = max(0.1, min(s["be_trigger_atr"], 5)); s["trail_atr"] = max(0.2, min(s["trail_atr"], 5))
     s["max_funding_pct"] = max(0.01, min(s["max_funding_pct"], 2)); s["min_qv_musd"] = max(0, min(s["min_qv_musd"], 10000))
+    s["strong_min_conf"] = max(50, min(s["strong_min_conf"], 95))
+    s["btc_move_pct"] = max(0.2, min(s["btc_move_pct"], 10)); s["btc_pause_min"] = max(1, min(s["btc_pause_min"], 240))
     kv_set("settings", s); return s
 
 # ---------------- indicators ----------------
 def ema(vals, n):
-    k = 2 / (n + 1); out = []; e = vals[0]
-    for v in vals: e = v * k + e * (1 - k); out.append(e)
+    """EMA seeded with the SMA of the first n values (TA-Lib / TradingView). Entries before that are None."""
+    out = [None] * len(vals)
+    if len(vals) < n: return out
+    k = 2 / (n + 1); e = sum(vals[:n]) / n; out[n - 1] = e
+    for i in range(n, len(vals)): e = vals[i] * k + e * (1 - k); out[i] = e
     return out
+
+def macd_hist(c, fast=12, slow=26, sig=9):
+    f, sl = ema(c, fast), ema(c, slow)
+    m = [a - b for a, b in zip(f, sl) if b is not None]
+    sg = ema(m, sig)
+    return [a - b for a, b in zip(m, sg) if b is not None], m, sg
 
 def rsi(closes, n=9):
     gains = losses = 0.0
@@ -133,7 +151,8 @@ def rsi(closes, n=9):
     for i in range(n + 1, len(closes)):
         d = closes[i] - closes[i - 1]
         ag = (ag * (n - 1) + max(d, 0)) / n; al = (al * (n - 1) + max(-d, 0)) / n
-    return 100.0 if al == 0 else 100 - 100 / (1 + ag / al)
+    if al == 0: return 50.0 if ag == 0 else 100.0
+    return 100 - 100 / (1 + ag / al)
 
 def atr(h, l, c, n=14):
     trs = [max(h[i] - l[i], abs(h[i] - c[i - 1]), abs(l[i] - c[i - 1])) for i in range(1, len(c))]
@@ -165,9 +184,12 @@ def candle_patterns(o, h, l, c, e21):
         elif c[-1] < l[m]: found.append("Inside bar breakdown"); vote -= 1
     return max(-1.0, min(1.0, vote)), found
 
-def analyze_tf(k, tf):
-    """k = (o,h,l,c,v) lists. Returns indicator votes and a trend score for higher-TF use."""
+def analyze_tf(k, tf, live=None, now=None):
+    """k = (o,h,l,c,v,open_times). Closed candles + the open candle; its close/high/low are replaced by the live
+    price while that candle is still open. Returns indicator votes and a trend score for higher-TF use."""
     o, h, l, c, v = k[:5]
+    if live and len(k) > 5 and (now or time.time()) < k[5][-1] + TF_SEC[tf]:
+        c = c[:-1] + [live]; h = h[:-1] + [max(h[-1], live)]; l = l[:-1] + [min(l[-1], live)]
     price = c[-1]
     e9, e21, e50 = ema(c, 9), ema(c, 21), ema(c, 50)
     comps = []  # (name, vote -1..1, weight, is_event, detail)
@@ -184,12 +206,12 @@ def analyze_tf(k, tf):
     rv = (1 if 50 < r <= 70 else 0.5 if 70 < r <= 80 else -0.5 if r > 80 else
           -1 if 30 <= r < 50 else -0.5 if 20 <= r < 30 else 0.5 if r < 20 else 0)
     comps.append(("RSI(9)", rv, 1.0, False, f"{r:.0f}"))
-    macd = [a - b for a, b in zip(ema(c, 12), ema(c, 26))]; sig = ema(macd, 9); hist = [a - b for a, b in zip(macd, sig)]
+    hist = macd_hist(c)[0]
     mv = (1 if hist[-1] > hist[-2] else 0.5) if hist[-1] > 0 else (-1 if hist[-1] < hist[-2] else -0.5)
     comps.append(("MACD hist", mv, 1.0, False, "rising" if hist[-1] > hist[-2] else "falling"))
     tp_ = [(h[j] + l[j] + c[j]) / 3 for j in range(len(c))]
     vw = sum(t * vv for t, vv in zip(tp_, v)) / max(sum(v), 1e-12)
-    comps.append(("VWAP", 1 if price > vw else -1, 1.0, False, "above" if price > vw else "below"))
+    comps.append(("VWAP (rolling 99)", 1 if price > vw else -1, 1.0, False, "above" if price > vw else "below"))
     avgv = sum(v[-22:-2]) / 20 or 1e-12
     spike_i = -2 if v[-2] > 2 * avgv else (-1 if v[-1] > 2 * avgv else None)
     w = c[-20:]; mid = sum(w) / 20; sd = (sum((x - mid) ** 2 for x in w) / 20) ** 0.5
@@ -252,13 +274,23 @@ STATE = {"signals": {}, "raw": {}, "tickers": {}, "updated": 0, "errors": [], "k
          "bot_username": None, "last_poll": 0, "poll_ok": False, "last_alert": {}, "hot_prev": {},
          "source": None, "universe": [], "info": {}, "universe_ts": 0, "weight": 0, "weight_min": 0, "backoff_until": 0,
          "scan": {}, "fetch_errors": 0, "rate_limit_hits": 0, "requests": 0, "spot_filters": {}, "funding": {},
-         "funding_ts": 0, "alert_times": []}
-KL = {}
+         "funding_ts": 0, "alert_times": [], "weight_peak": 0, "coverage": {}, "cov_tot": {}, "cov_min": {}, "short_hist": {},
+         "gaps": {}, "align_retries": 0, "retries": 0, "max_age_seen": {}, "live_src": None, "rest_price_polls": 0,
+         "ws": {"status": "starting", "since": None, "last_msg": 0, "msgs": 0, "reconnects": 0, "up_s": 0.0, "start": time.time(), "url": None},
+         "hb": {}, "incidents": {}, "inc_log": [], "inc_last_notify": {}, "restarts": {}, "err_count": {}, "start": time.time(),
+         "mood": {}, "pause": {"LONG": 0, "SHORT": 0}, "ready": False, "ex_pnl": None}
+KL = {}                     # (sym, tf) -> (o, h, l, c, v, open_times)
+KTS = {}                    # (sym, tf) -> local time of the last successful fetch
+LIVE = {}                   # sym -> (live price, local receive time)
 client: httpx.AsyncClient = None
-SEM = asyncio.Semaphore(int(os.environ.get("FETCH_CONCURRENCY", "20")))
+SEM = asyncio.Semaphore(int(os.environ.get("FETCH_CONCURRENCY", "64")))
+POST_LOCK = asyncio.Lock()   # one compute/alert pass at a time
+TRADE_LOCK = asyncio.Lock()  # never two order flows at once (manual vs auto vs exits)
 
-def add_err(msg):
-    STATE["errors"] = ([{"ts": time.time(), "msg": msg[:300]}] + STATE["errors"])[:30]; log.warning(msg[:300])
+def add_err(msg, cat=None):
+    cat = cat or msg.split(":")[0].split(" ")[0][:24]
+    STATE["err_count"][cat] = STATE["err_count"].get(cat, 0) + 1
+    STATE["errors"] = ([{"ts": time.time(), "cat": cat, "msg": msg[:300]}] + STATE["errors"])[:40]; log.warning(msg[:300])
 
 def md_path(p):  # p like "klines", "ticker/24hr", "exchangeInfo"
     return ("/fapi/v1/" if STATE["source"] == "futures" else "/api/v3/") + p
@@ -276,19 +308,22 @@ async def weight_gate():
         return
 
 async def md_get(p, params):
-    """Public market-data GET with weight tracking and 429/418 backoff."""
+    """Public market-data GET with weight tracking and 429/418 backoff (Retry-After honoured)."""
     await weight_gate()
     hosts = [FAPI] if STATE["source"] == "futures" else SPOT_PUBLIC
     last = None
     for host in hosts:
         try:
-            r = await client.get(host + md_path(p), params=params, timeout=15)
+            r = await client.get(host + md_path(p), params=params, timeout=10)
             STATE["requests"] += 1
             w = r.headers.get("x-mbx-used-weight-1m")
-            if w: STATE["weight"], STATE["weight_min"] = int(w), int(time.time() // 60)
+            if w:
+                STATE["weight"], STATE["weight_min"] = int(w), int(time.time() // 60)
+                STATE["weight_peak"] = max(STATE["weight_peak"], int(w))
             if r.status_code in (429, 418):
                 STATE["rate_limit_hits"] += 1
-                STATE["backoff_until"] = time.time() + int(r.headers.get("retry-after", "60"))
+                ra = r.headers.get("retry-after")
+                STATE["backoff_until"] = max(STATE["backoff_until"], time.time() + (int(ra) if ra and ra.isdigit() else 60))
                 raise RuntimeError(f"rate limited HTTP {r.status_code}")
             if r.status_code == 200: return r.json()
             last = f"{host}{md_path(p)} HTTP {r.status_code}: {r.text[:150]}"
@@ -328,7 +363,7 @@ async def refresh_universe():
         mn = f.get("MIN_NOTIONAL") or f.get("NOTIONAL") or {}
         meta[s] = {"base": x["baseAsset"], "tick": f["PRICE_FILTER"]["tickSize"], "step": lot.get("stepSize", "1"),
                    "min_qty": float(lot.get("minQty", 0)), "min_notional": float(mn.get("notional", mn.get("minNotional", 5)))}
-    for k in [k for k in KL if k[0] not in meta]: KL.pop(k, None)
+    for k in [k for k in KL if k[0] not in meta]: KL.pop(k, None); KTS.pop(k, None)
     STATE["universe"], STATE["info"], STATE["universe_ts"] = uni, meta, time.time()
     update_tickers(tick)
     log.info("universe: %d %s symbols", len(uni), STATE["source"])
@@ -338,45 +373,127 @@ def update_tickers(tick):
         if t["symbol"] in STATE["info"]:
             STATE["tickers"][t["symbol"]] = {"chg": round(float(t.get("priceChangePercent") or 0), 2), "qv": float(t.get("quoteVolume") or 0)}
 
+def period_start(tf, t=None):
+    t = time.time() if t is None else t
+    return t - t % TF_SEC[tf]
+
 async def fetch_tf(tf):
-    errs = 0
+    """Fetch klines for every coin. Retries (x3) on errors and when the exchange has not opened the new candle yet,
+    so each cycle covers all 200 coins with candle-aligned data."""
+    errs = 0; ok = 0; short = 0; uni = list(STATE["universe"]); t0 = time.time(); worst_age = 0.0
     async def one(sym):
-        nonlocal errs
-        async with SEM:
+        nonlocal errs, ok, short, worst_age
+        for attempt in range(4):
             try:
-                kl = await md_get("klines", {"symbol": sym, "interval": tf, "limit": KLINES})
-                if len(kl) >= 60:
-                    KL[(sym, tf)] = ([float(x[1]) for x in kl], [float(x[2]) for x in kl], [float(x[3]) for x in kl],
-                                     [float(x[4]) for x in kl], [float(x[5]) for x in kl], [x[0] / 1000 for x in kl])
+                async with SEM:
+                    kl = await md_get("klines", {"symbol": sym, "interval": tf, "limit": KLINES})
+                if not kl: raise RuntimeError("empty klines")
+                if kl[-1][0] / 1000 < period_start(tf) and attempt < 3:
+                    STATE["align_retries"] += 1; await asyncio.sleep(1.0); continue   # new candle not open yet
+                ots = [x[0] / 1000 for x in kl]
+                gaps = sum(1 for a, b in zip(ots, ots[1:]) if b - a != TF_SEC[tf])
+                if gaps: STATE["gaps"][f"{sym}|{tf}"] = gaps
+                else: STATE["gaps"].pop(f"{sym}|{tf}", None)
+                if len(kl) < 60: short += 1; return            # newly listed coin: not enough history
+                now = time.time(); prev = KTS.get((sym, tf))
+                if prev: worst_age = max(worst_age, now - prev)
+                KL[(sym, tf)] = ([float(x[1]) for x in kl], [float(x[2]) for x in kl], [float(x[3]) for x in kl],
+                                 [float(x[4]) for x in kl], [float(x[5]) for x in kl], ots)
+                KTS[(sym, tf)] = now; ok += 1
+                return
+            except asyncio.CancelledError: raise
             except Exception as e:
-                errs += 1
-                if errs <= 3: add_err(f"klines {sym} {tf}: {e}")
-    t0 = time.time()
-    await asyncio.gather(*[one(s) for s in list(STATE["universe"])])
+                if attempt == 3:
+                    errs += 1
+                    if errs <= 3: add_err(f"klines {sym} {tf}: {e}", "klines")
+                else:
+                    STATE["retries"] += 1; await asyncio.sleep(0.5 * (attempt + 1))
+    await asyncio.gather(*[one(s) for s in uni])
+    denom = max(1, len(uni) - short); cov = round(100 * ok / denom, 2)
+    STATE["coverage"][tf] = cov; STATE["short_hist"][tf] = short
+    STATE["cov_min"][tf] = min(STATE["cov_min"].get(tf, 100.0), cov)
+    ct = STATE["cov_tot"].setdefault(tf, [0, 0]); ct[0] += ok; ct[1] += denom
+    STATE["max_age_seen"][tf] = max(STATE["max_age_seen"].get(tf, 0), round(worst_age, 1))
     STATE["fetch_errors"] += errs
-    STATE["scan"][f"fetch_{tf}_s"] = round(time.time() - t0, 2)
+    STATE["scan"][f"fetch_{tf}_s"] = round(time.time() - t0, 2); STATE["scan"][f"last_{tf}"] = time.time()
+
+def best_price(sym, now=None):
+    lv = LIVE.get(sym)
+    if lv and (now or time.time()) - lv[1] <= LIVE_MAX_AGE: return lv[0]
+    return None
+
+def is_stale(sym, tf, now):
+    ts = KTS.get((sym, tf)); iv = FETCH_EVERY[tf]
+    if not ts or now - ts > STALE_MULT * iv: return True
+    k = KL.get((sym, tf))
+    return bool(k) and now - (k[5][-1] + TF_SEC[tf]) > iv        # candle should have rolled over by now
 
 def compute_all(s):
-    t0 = time.time(); out = {tf: {} for tf in TFS}; raw_all = {}
+    t0 = time.time(); now = t0; out = {tf: {} for tf in TFS}; btc_raw = {}
     for sym in STATE["universe"]:
-        raw = {}
+        lp = best_price(sym, now); raw = {}; stale = {}
         for tf in ALL_TFS:
             k = KL.get((sym, tf))
-            if k:
-                try: raw[tf] = analyze_tf(k, tf)
-                except Exception as e: add_err(f"analyze {sym} {tf}: {type(e).__name__}")
-        raw_all[sym] = raw
+            if not k: continue
+            stale[tf] = is_stale(sym, tf, now)
+            try: raw[tf] = analyze_tf(k, tf, lp, now)
+            except Exception as e: add_err(f"analyze {sym} {tf}: {type(e).__name__}: {e}", "analyze")
+        if sym == "BTCUSDT": btc_raw = raw
         for tf in TFS:
-            if tf in raw: out[tf][sym] = combine(raw, tf, s)
-        sigs = [out[tf].get(sym, {}).get("signal") for tf in TFS]
-        strong = sigs[0] in ("LONG", "SHORT") and all(x == sigs[0] for x in sigs)
+            if tf not in raw: continue
+            a = combine(raw, tf, s)
+            a["stale"] = stale[tf] or any(stale.get(h, True) for h in HTF[tf])
+            a["age"] = round(now - KTS.get((sym, tf), 0), 1); a["price_src"] = "live" if lp else "kline"
+            out[tf][sym] = a
+        sigs = [out[tf][sym]["signal"] if sym in out[tf] else None for tf in TFS]
+        d = 1 if sigs[0] == "LONG" else -1 if sigs[0] == "SHORT" else 0
+        h1 = raw.get("1h")
+        strong = (bool(d) and all(x == sigs[0] for x in sigs) and h1 is not None and h1["trend"] * d > -0.25
+                  and all(out[tf][sym]["confidence"] >= s["strong_min_conf"] for tf in TFS)
+                  and not any(out[tf][sym]["stale"] for tf in TFS))
         flags = liq_flags(sym, s)
         for tf in TFS:
             if sym in out[tf]:
-                out[tf][sym]["strong"] = strong; out[tf][sym]["flags"] = flags
-                out[tf][sym]["filtered"] = bool(flags) and s["liq_filter"]
+                a = out[tf][sym]; a["strong"] = strong; a["flags"] = flags
+                a["filtered"] = bool(flags) and s["liq_filter"]
+                a["paused"] = side_paused(a["signal"], s, now)
     STATE["signals"] = out; STATE["updated"] = time.time()
-    STATE["scan"]["compute_s"] = round(time.time() - t0, 2)
+    STATE["mood"] = market_mood(out, btc_raw, s, now)
+    STATE["scan"]["compute_s"] = round(time.time() - t0, 3)
+
+def side_paused(side, s, now=None):
+    return bool(s["btc_guard"]) and side in ("LONG", "SHORT") and STATE["pause"].get(side, 0) > (now or time.time())
+
+def market_mood(out, btc_raw, s, now):
+    m = {"tf": {}, "btc": {}, "ts": now}
+    for tf in TFS:
+        vals = list(out[tf].values()); n = len(vals) or 1
+        L = sum(1 for a in vals if a["signal"] == "LONG"); S = sum(1 for a in vals if a["signal"] == "SHORT")
+        m["tf"][tf] = {"long_pct": round(100 * L / n, 1), "short_pct": round(100 * S / n, 1),
+                       "neutral_pct": round(100 * (len(vals) - L - S) / n, 1), "n": len(vals)}
+    for tf in ("15m", "1h"):
+        r = btc_raw.get(tf)
+        if r: m["btc"][tf] = {"trend": round(r["trend"], 2), "label": "UP" if r["trend"] >= 0.25 else "DOWN" if r["trend"] <= -0.25 else "SIDEWAYS"}
+    k1 = KL.get(("BTCUSDT", "1m")); px = best_price("BTCUSDT", now) or (k1[3][-1] if k1 else None)
+    m["btc_price"] = px
+    m["btc_move_5m"] = round(100 * (px - k1[0][-5]) / k1[0][-5], 3) if k1 and px and len(k1[0]) >= 5 else None
+    t5 = m["tf"]["5m"]; b = [x["label"] for x in m["btc"].values()]
+    if t5["long_pct"] >= 55 or (b and all(x == "UP" for x in b) and t5["long_pct"] > t5["short_pct"]): m["label"] = "BULLISH"
+    elif t5["short_pct"] >= 55 or (b and all(x == "DOWN" for x in b) and t5["short_pct"] > t5["long_pct"]): m["label"] = "BEARISH"
+    else: m["label"] = "MIXED"
+    m["paused"] = {side: (round(STATE["pause"][side] - now) if side_paused(side, s, now) else 0) for side in ("LONG", "SHORT")}
+    m["guard"] = {"on": s["btc_guard"], "pct": s["btc_move_pct"], "min": s["btc_pause_min"]}
+    return m
+
+async def update_btc_guard(s):
+    mv = STATE["mood"].get("btc_move_5m"); now = time.time()
+    if not s["btc_guard"] or mv is None: return
+    for side, hit in (("LONG", mv <= -s["btc_move_pct"]), ("SHORT", mv >= s["btc_move_pct"])):
+        if hit:
+            was = STATE["pause"][side] > now
+            STATE["pause"][side] = now + s["btc_pause_min"] * 60
+            if not was:
+                await notify(f"🛑 BTC sudden move {mv:+.2f}% in ~5m → {side} alerts + auto trades {s['btc_pause_min']} min ke liye PAUSE.")
 
 def liq_flags(sym, s):
     """Funding / liquidity warnings for a symbol (empty list = OK)."""
@@ -385,7 +502,7 @@ def liq_flags(sym, s):
     if t and t.get("qv", 0) < s["min_qv_musd"] * 1e6: out.append(f"low volume {t.get('qv', 0) / 1e6:.0f}M")
     return out
 
-def is_hot(a): return a["signal"] != "NEUTRAL" and a["confidence"] >= HOT and not a.get("filtered")
+def is_hot(a): return a["signal"] != "NEUTRAL" and a["confidence"] >= HOT and not a.get("filtered") and not a.get("stale")
 
 def favorites(): return kv_get("favorites", [])
 
@@ -393,7 +510,9 @@ def sorted_signals(tf):
     sigs = STATE["signals"].get(tf, {})
     def key(item):
         sym, a = item
-        return (0 if is_hot(a) else 1 if a["signal"] != "NEUTRAL" else 2, -a["confidence"], -STATE["tickers"].get(sym, {}).get("qv", 0))
+        hot = is_hot(a); st = a.get("strong") and not a.get("filtered") and not a.get("stale")
+        grp = 0 if hot and st else 1 if hot else 2 if st else 3 if a["signal"] != "NEUTRAL" else 4   # STRONG confluence first
+        return (grp, -a["confidence"], -STATE["tickers"].get(sym, {}).get("qv", 0))
     return sorted(sigs.items(), key=key)
 
 async def record_and_alert(s):
@@ -407,19 +526,21 @@ async def record_and_alert(s):
                 with db() as c:
                     c.execute("INSERT INTO signals(ts,symbol,tf,signal,confidence,price,entry,tp,sl,strong) VALUES(?,?,?,?,?,?,?,?,?,?)",
                               (now, sym, tf, cur, a["confidence"], a["price"], a["entry"], a["tp"], a["sl"], int(a["strong"])))
-                    c.execute("INSERT INTO paper(ts,symbol,tf,side,confidence,entry,tp,sl,last_ot) VALUES(?,?,?,?,?,?,?,?,?)",
-                              (now, sym, tf, cur, a["confidence"], a["entry"], a["tp"], a["sl"], last_ot))
-                if STATE["hot_prev"]:  # skip the burst on the very first scan after start
-                    fresh.append((sym, tf, a))
+                    dup = c.execute("SELECT 1 FROM paper WHERE status='OPEN' AND symbol=? AND tf=? AND side=?", (sym, tf, cur)).fetchone()
+                    if not dup:   # one open paper position per coin+tf+side (no double counting on 79/80 flicker)
+                        c.execute("INSERT INTO paper(ts,symbol,tf,side,confidence,entry,tp,sl,last_ot) VALUES(?,?,?,?,?,?,?,?,?)",
+                                  (now, sym, tf, cur, a["confidence"], a["entry"], a["tp"], a["sl"], last_ot))
+                fresh.append((sym, tf, a))
             STATE["hot_prev"][k] = cur
     if not s["alerts"] or not fresh: return
     favs = set(favorites()); cd = s["alert_cooldown_min"] * 60
     STATE["alert_times"] = [t for t in STATE["alert_times"] if now - t < 60]
     budget = s["max_alerts_per_min"] - len(STATE["alert_times"])
     send, skipped = [], 0
-    for sym, tf, a in sorted(fresh, key=lambda x: (x[0] not in favs, -x[2]["confidence"])):
+    for sym, tf, a in sorted(fresh, key=lambda x: (x[0] not in favs, not x[2].get("strong"), -x[2]["confidence"])):
         if a["confidence"] < s["alert_threshold"]: continue
         if s["alerts_fav_only"] and sym not in favs: continue
+        if a.get("paused"): continue                      # BTC sudden-move guard
         key = f"{sym}|{tf}|{a['signal']}"
         if now - STATE["last_alert"].get(key, 0) < cd: continue
         if len(send) >= budget: skipped += 1; continue
@@ -428,7 +549,7 @@ async def record_and_alert(s):
     STATE["alert_times"] += [now] * len(send)
     lines = [f"🔔 Naye {s['alert_threshold']}%+ signals ({len(send)}) — indicator confidence, win probability nahi"]
     for sym, tf, a in send:
-        lines.append(f"{'⭐ ' if sym in favs else ''}{'🟢' if a['signal'] == 'LONG' else '🔴'} {a['signal']} {sym} [{tf}] {a['confidence']}%{' ⚡' if a['strong'] else ''}\n"
+        lines.append(f"{'⭐ ' if sym in favs else ''}{'🟢' if a['signal'] == 'LONG' else '🔴'} {a['signal']} {sym} [{tf}] {a['confidence']}%{' 🔥 STRONG (1m+5m+15m)' if a['strong'] else ''}\n"
                      f"   Entry {fmt_price(sym, a['entry'])} | TP {fmt_price(sym, a['tp'])} | SL {fmt_price(sym, a['sl'])}")
     if skipped: lines.append(f"(+{skipped} aur — per-minute limit; /signals dekhein)")
     await notify("\n".join(lines))
@@ -492,51 +613,250 @@ async def refresh_funding():
     STATE["funding_ts"] = time.time()
 
 async def tickers_loop():
-    n = 0
+    """Universe (hourly), 24h tickers (60s) and funding (5 min)."""
+    last_tick = 0
     while True:
-        await asyncio.sleep(60 if n else 5); n += 1
+        STATE["hb"]["tickers"] = time.time()
         try:
-            if time.time() - STATE["universe_ts"] > 3600: await refresh_universe()
-            elif n > 1: update_tickers(await md_get("ticker/24hr", {}))
+            if not STATE["universe"] or time.time() - STATE["universe_ts"] > 3600: await refresh_universe(); last_tick = time.time()
+            elif time.time() - last_tick >= 60: update_tickers(await md_get("ticker/24hr", {})); last_tick = time.time()
             if time.time() - STATE.get("funding_ts", 0) > 300: await refresh_funding()
-        except Exception as e: add_err(f"ticker/universe/funding: {e}")
+        except asyncio.CancelledError: raise
+        except Exception as e: add_err(f"ticker/universe/funding: {e}", "tickers")
+        await asyncio.sleep(5 if not STATE["universe"] else 10)
 
-async def htf_loop():
-    """Higher timeframes (5m/15m/1h) refresh on their own schedule so the 1m scan stays ~15s fresh."""
-    last = {tf: 0 for tf in ALL_TFS[1:]}
+async def kline_loop(tf):
+    """One loop per timeframe, aligned to candle closes: fetches at boundary + CLOSE_LAG, every FETCH_EVERY[tf] s."""
+    iv = FETCH_EVERY[tf]; name = f"kl_{tf}"
     while True:
-        try:
-            if STATE["universe"]:
-                for tf in ALL_TFS[1:]:
-                    if time.time() - last[tf] >= FETCH_EVERY[tf] - 1:
-                        await fetch_tf(tf); last[tf] = time.time()
-        except Exception as e: add_err(f"htf: {type(e).__name__}: {e}")
-        await asyncio.sleep(3)
+        STATE["hb"][name] = time.time()
+        if not STATE["universe"]:
+            await asyncio.sleep(1); continue
+        if any(KTS.get((x, tf)) for x in STATE["universe"][:10]):
+            due = (time.time() - CLOSE_LAG) // iv * iv + iv + CLOSE_LAG
+            while time.time() < due:
+                await asyncio.sleep(max(0.05, min(5, due - time.time()))); STATE["hb"][name] = time.time()
+        await fetch_tf(tf); STATE["hb"][name] = time.time()
+        try: await post_scan(tf)
+        except asyncio.CancelledError: raise
+        except Exception as e: add_err(f"post_scan {tf}: {type(e).__name__}: {e}", "scanner")
 
-async def scanner_loop():
+async def post_scan(tf):
+    if not KL: return
+    async with POST_LOCK:
+        s = get_settings(); t0 = time.time(); compute_all(s)
+        if not STATE["ready"]:
+            STATE["ready"] = all(STATE["coverage"].get(t, 0) >= 90 for t in ALL_TFS)
+            prime_hot(); return                     # no alert burst for setups that were already hot at start
+        await update_btc_guard(s)
+        await record_and_alert(s)
+        update_paper()
+        STATE["scan"]["cycle_s"] = round(time.time() - t0, 3)
+    if tf == "1m":
+        async with TRADE_LOCK:
+            await manage_positions(); await auto_trade()
+
+def prime_hot():
+    for tf in TFS:
+        for sym, a in STATE["signals"].get(tf, {}).items():
+            STATE["hot_prev"][(sym, tf)] = a["signal"] if is_hot(a) else None
+
+async def live_loop():
+    """Every 2 s: REST price fallback when the WebSocket is silent, then recompute signals with live prices."""
     while True:
-        t0 = time.time()
+        STATE["hb"]["live"] = time.time()
         try:
-            if not STATE["universe"]: await refresh_universe()
-            await fetch_tf("1m")
-            if all((s_, "15m") in KL for s_ in STATE["universe"][:20]):
-                s = get_settings(); compute_all(s)
-                STATE["scan"]["cycle_s"] = round(time.time() - t0, 2)
-                await record_and_alert(s)
-                update_paper()
-                await manage_positions()
-                await auto_trade()
-        except Exception as e: add_err(f"scanner: {type(e).__name__}: {e}")
-        await asyncio.sleep(max(1, FETCH_EVERY["1m"] - (time.time() - t0)))
+            ws_age = time.time() - STATE["ws"]["last_msg"]
+            if ws_age > 5 and STATE["universe"]:
+                j = await md_get("ticker/price", {}); now = time.time()
+                for x in j:
+                    if x.get("symbol") in STATE["info"]: LIVE[x["symbol"]] = (float(x["price"]), now)
+                STATE["live_src"] = "rest"; STATE["rest_price_polls"] += 1
+            elif ws_age <= 5: STATE["live_src"] = "ws"
+            if KL and STATE["universe"] and not POST_LOCK.locked(): compute_all(get_settings())
+        except asyncio.CancelledError: raise
+        except Exception as e: add_err(f"live: {type(e).__name__}: {e}", "live")
+        await asyncio.sleep(2)
 
-def q_step(val, step):
-    st = Decimal(step).normalize()
-    q = (Decimal(str(val)) / st).to_integral_value(ROUND_DOWN) * st
+async def ws_loop():
+    """Binance !miniTicker@arr (all symbols, ~1 s). Futures /market/stream path, spot fallback; reconnect w/ backoff."""
+    W = STATE["ws"]
+    try: import websockets
+    except ImportError:
+        W["status"] = "websockets not installed (REST price fallback)"
+        while True: STATE["hb"]["ws"] = time.time(); await asyncio.sleep(10)
+    backoff = 1
+    while True:
+        STATE["hb"]["ws"] = time.time()
+        url = WS_FUT if STATE["source"] == "futures" else WS_SPOT; W["url"] = url.split("?")[0]
+        try:
+            W["status"] = "connecting"
+            async with websockets.connect(url, open_timeout=10, ping_interval=20, ping_timeout=20, close_timeout=5, max_size=2 ** 23) as ws:
+                W["status"] = "connected"; W["since"] = time.time(); backoff = 1
+                while True:
+                    msg = await asyncio.wait_for(ws.recv(), timeout=30)
+                    now = time.time(); d = json.loads(msg)
+                    if isinstance(d, dict): d = d.get("data", d)
+                    if isinstance(d, list):
+                        for x in d:
+                            sym = x.get("s")
+                            if sym in STATE["info"]: LIVE[sym] = (float(x["c"]), now)
+                    W["last_msg"] = now; W["msgs"] += 1; STATE["hb"]["ws"] = now
+        except asyncio.CancelledError: raise
+        except Exception as e:
+            add_err(f"ws: {type(e).__name__}: {str(e)[:120]}", "ws")
+        finally:
+            if W.get("since"): W["up_s"] += time.time() - W["since"]; W["since"] = None
+            W["status"] = "disconnected"
+        W["reconnects"] += 1
+        await asyncio.sleep(backoff); backoff = min(backoff * 2, 60)
+
+def ws_uptime_pct():
+    W = STATE["ws"]; now = time.time(); up = W["up_s"] + ((now - W["since"]) if W.get("since") else 0)
+    return round(100 * up / max(1, now - W["start"]), 2)
+
+# ---------------- health monitor / self-healing ----------------
+WATCH = {}   # name -> (factory, max silence s) ; filled in lifespan
+TASKS = {}
+
+def start_task(name):
+    TASKS[name] = asyncio.create_task(WATCH[name][0]()); STATE["hb"][name] = time.time()
+
+def health_conditions(now):
+    c = {}
+    if now - STATE["start"] < 120: return c
+    for tf in ALL_TFS:
+        cov = STATE["coverage"].get(tf, 0); ages = [now - KTS[(x, tf)] for x in STATE["universe"] if (x, tf) in KTS]
+        mx = max(ages) if ages else 1e9
+        c[f"data {tf}"] = (f"coverage {cov}% · max age {mx:.0f}s" if cov < 95 or mx > STALE_MULT * FETCH_EVERY[tf] else None)
+    W = STATE["ws"]
+    c["websocket"] = (f"{W['status']} (REST price fallback active)" if now - W["last_msg"] > 60 else None)
+    if not DISABLE_BOT:
+        c["telegram"] = (f"poller silent {now - STATE['last_poll']:.0f}s" if now - STATE["last_poll"] > 120 or not STATE["poll_ok"] else None)
+    try: kv_set("_hb", now); c["database"] = None
+    except Exception as e: c["database"] = f"{type(e).__name__}: {e}"
+    c["rate limit"] = (f"Binance backoff {STATE['backoff_until'] - now:.0f}s" if STATE["backoff_until"] > now else None)
+    return c
+
+async def process_incidents(conds, now):
+    inc = STATE["incidents"]
+    for name, msg in conds.items():
+        cur = inc.get(name)
+        if msg:
+            if not cur: inc[name] = cur = {"since": now, "msg": msg, "notified": False}
+            cur["msg"] = msg
+            if (not cur["notified"] and now - cur["since"] >= 30 and now - STATE["inc_last_notify"].get(name, 0) > INC_COOLDOWN):
+                cur["notified"] = True; STATE["inc_last_notify"][name] = now
+                await notify(f"⚠️ Health alert: {name} — {msg}\nBot khud recover karne ki koshish kar raha hai. /health")
+        elif cur:
+            inc.pop(name)
+            STATE["inc_log"] = ([{"name": name, "since": cur["since"], "end": now, "msg": cur["msg"]}] + STATE["inc_log"])[:20]
+            if cur["notified"]: await notify(f"✅ Recovered: {name} ({int(now - cur['since'])}s ke baad theek)")
+
+async def watchdog():
+    while True:
+        await asyncio.sleep(10); now = time.time()
+        try:
+            for name, (fac, lim) in WATCH.items():
+                t = TASKS.get(name); hb = STATE["hb"].get(name, now)
+                dead = t is None or t.done(); silent = now - hb > lim
+                if not (dead or silent): continue
+                why = "silent %ds" % (now - hb)
+                if t is not None and t.done():
+                    exc = None if t.cancelled() else t.exception()
+                    why = f"crashed: {type(exc).__name__}: {exc}" if exc else "stopped"
+                if t is not None and not t.done():
+                    t.cancel(); await asyncio.wait([t], timeout=5)    # fully stop before restarting (single poller)
+                STATE["restarts"][name] = STATE["restarts"].get(name, 0) + 1
+                add_err(f"watchdog: restarted {name} ({why})", "watchdog"); start_task(name)
+            await process_incidents(health_conditions(now), now)
+        except asyncio.CancelledError: raise
+        except Exception as e: add_err(f"watchdog: {type(e).__name__}: {e}", "watchdog")
+
+def fmt_age(x): return "n/a" if x is None else (f"{x:.0f}s" if x < 120 else f"{x / 60:.1f}m")
+
+def health_data():
+    now = time.time(); uni = STATE["universe"]; tfs = {}
+    for tf in ALL_TFS:
+        ages = sorted(now - KTS[(x, tf)] for x in uni if (x, tf) in KTS); ct = STATE["cov_tot"].get(tf, [0, 0])
+        tfs[tf] = {"interval_s": FETCH_EVERY[tf], "coverage_last": STATE["coverage"].get(tf), "coverage_min": STATE["cov_min"].get(tf),
+                   "coverage_avg": round(100 * ct[0] / ct[1], 2) if ct[1] else None, "max_age_s": round(ages[-1], 1) if ages else None,
+                   "median_age_s": round(ages[len(ages) // 2], 1) if ages else None, "max_age_seen_s": STATE["max_age_seen"].get(tf),
+                   "have": len(ages), "short_history": STATE["short_hist"].get(tf, 0), "fetch_s": STATE["scan"].get(f"fetch_{tf}_s"),
+                   "stale_signals": sum(1 for a in STATE["signals"].get(tf, {}).values() if a.get("stale")) if tf in TFS else None}
+    W = STATE["ws"]; live_fresh = sum(1 for x in uni if best_price(x, now) is not None)
+    return {"uptime_s": round(now - STATE["start"]), "source": STATE["source"], "coins": len(uni), "ready": STATE["ready"], "tf": tfs,
+            "ws": {"status": W["status"], "url": W["url"], "last_msg_age_s": round(now - W["last_msg"], 1) if W["last_msg"] else None,
+                   "uptime_pct": ws_uptime_pct(), "reconnects": W["reconnects"], "msgs": W["msgs"]},
+            "live_price": {"source": STATE["live_src"], "fresh_coins": live_fresh, "rest_polls": STATE["rest_price_polls"]},
+            "rate": {"weight": STATE["weight"], "peak": STATE["weight_peak"], "limit": weight_limit(), "hits_429_418": STATE["rate_limit_hits"],
+                     "backoff_s": max(0, round(STATE["backoff_until"] - now)), "requests": STATE["requests"], "retries": STATE["retries"],
+                     "align_retries": STATE["align_retries"]},
+            "telegram": {"poll_ok": STATE["poll_ok"], "last_poll_age_s": round(now - STATE["last_poll"], 1) if STATE["last_poll"] else None,
+                         "disabled": DISABLE_BOT},
+            "tasks": {n: {"alive": bool(TASKS.get(n)) and not TASKS[n].done(), "hb_age_s": round(now - STATE["hb"].get(n, now), 1),
+                          "restarts": STATE["restarts"].get(n, 0)} for n in WATCH},
+            "errors": {"total": sum(STATE["err_count"].values()), "by_type": STATE["err_count"], "fetch_errors": STATE["fetch_errors"],
+                       "recent": STATE["errors"][:8]},
+            "candle_gaps": len(STATE["gaps"]), "incidents": [{"name": k, **v} for k, v in STATE["incidents"].items()],
+            "incident_log": STATE["inc_log"][:10], "scan": STATE["scan"]}
+
+def health_text():
+    h = health_data(); w = h["ws"]; r = h["rate"]
+    lines = [f"🩺 Health · uptime {fmt_age(h['uptime_s'])} · {h['coins']} coins ({h['source']})"]
+    for tf, d in h["tf"].items():
+        lines.append(f"{tf:>3}: age max {fmt_age(d['max_age_s'])} (limit {STALE_MULT * d['interval_s']}s) · coverage {d['coverage_last']}% "
+                     f"(min {d['coverage_min']}%) · fetch {d['fetch_s']}s" + (f" · stale {d['stale_signals']}" if d["stale_signals"] else ""))
+    lines.append(f"WS: {w['status']} · last msg {fmt_age(w['last_msg_age_s'])} · uptime {w['uptime_pct']}% · reconnects {w['reconnects']}")
+    lines.append(f"Live price: {h['live_price']['source']} · {h['live_price']['fresh_coins']}/{h['coins']} fresh")
+    lines.append(f"Rate: weight {r['weight']}/{r['limit']} (peak {r['peak']}) · 429/418 {r['hits_429_418']} · retries {r['retries']}")
+    lines.append(f"Telegram poll: {'disabled' if h['telegram']['disabled'] else 'OK' if h['telegram']['poll_ok'] else 'FAIL'} · errors {h['errors']['total']} · restarts {sum(t['restarts'] for t in h['tasks'].values())}")
+    if h["incidents"]: lines.append("⚠️ Open: " + "; ".join(f"{i['name']}: {i['msg']}" for i in h["incidents"]))
+    else: lines.append("✅ Koi open incident nahi")
+    return "\n".join(lines)
+
+def mood_text():
+    m = STATE["mood"]
+    if not m: return "Market data abhi load ho raha hai."
+    lines = [f"🌡 Market mood: {m['label']}"]
+    for tf, b in m["btc"].items(): lines.append(f"BTC {tf}: {b['label']} (trend {b['trend']:+.2f})")
+    if m.get("btc_price"): lines.append(f"BTC {m['btc_price']:.1f} · 5m move {m['btc_move_5m']:+.2f}%" if m["btc_move_5m"] is not None else f"BTC {m['btc_price']:.1f}")
+    for tf, d in m["tf"].items(): lines.append(f"{tf}: LONG {d['long_pct']}% · SHORT {d['short_pct']}% · neutral {d['neutral_pct']}% ({d['n']} coins)")
+    g = m["guard"]; p = m["paused"]
+    lines.append(f"BTC guard {'ON' if g['on'] else 'OFF'}: ±{g['pct']}% in 5m → {g['min']} min pause")
+    lines.append("⏸ Paused: " + (", ".join(f"{k} ({v // 60}m {v % 60}s)" for k, v in p.items() if v) or "none"))
+    return "\n".join(lines)
+
+def strong_list(limit=20):
+    out = []
+    for sym, a in STATE["signals"].get("5m", {}).items():
+        if a.get("strong") and not a.get("filtered"):
+            confs = {tf: STATE["signals"][tf][sym]["confidence"] for tf in TFS if sym in STATE["signals"].get(tf, {})}
+            out.append((sym, a, confs))
+    out.sort(key=lambda x: -sum(x[2].values()))
+    return out[:limit]
+
+def strong_text():
+    lst = strong_list()
+    lines = [f"🔥 STRONG confluence — 1m + 5m + 15m same direction (har TF {get_settings()['strong_min_conf']}%+), 1h opposite nahi", ""]
+    if not lst: lines.append("Abhi koi STRONG coin nahi.")
+    for sym, a, confs in lst:
+        lines.append(f"{'🟢' if a['signal'] == 'LONG' else '🔴'} {a['signal']} {sym} · " + " · ".join(f"{t} {c}%" for t, c in confs.items())
+                     + (" ⏸" if a.get("paused") else ""))
+        lines.append(f"   5m: E {fmt_price(sym, a['entry'])} | TP {fmt_price(sym, a['tp'])} | SL {fmt_price(sym, a['sl'])}")
+    return "\n".join(lines)
+
+def q_step(val, step, rounding=ROUND_DOWN):
+    """Snap to an exchange step/tick with Decimal math (no float artefacts). Quantities round down, prices to nearest."""
+    st = Decimal(str(step)).normalize()
+    q = (Decimal(str(val)) / st).to_integral_value(rounding) * st
     return format(q.quantize(st) if st.as_tuple().exponent < 0 else q.quantize(Decimal(1)), "f")
 
 def fmt_price(sym, p):
     t = STATE["info"].get(sym, {}).get("tick")
-    return q_step(p, t) if t else f"{p:.6g}"
+    return q_step(p, t, ROUND_HALF_UP) if t else f"{p:.6g}"
+
+def q_price(p, tick): return q_step(p, tick, ROUND_HALF_UP)
 
 # ---------------- Binance signed ----------------
 def _sign(params):
@@ -657,11 +977,12 @@ async def spot_filters(sym):
            "min_notional": float((f.get("NOTIONAL") or f.get("MIN_NOTIONAL") or {}).get("minNotional", 5))}
     STATE["spot_filters"][sym] = out; return out
 
-async def execute(sym, direction, mode="manual"):
-    """direction LONG/SHORT. If an opposite position is open on sym, this closes it instead."""
-    s = get_settings(); tf = s["timeframe"]; market = s["market"]
+async def execute(sym, direction, mode="manual", tf=None):
+    """direction LONG/SHORT. If an opposite position is open on sym, this closes it instead. Caller holds TRADE_LOCK."""
+    s = get_settings(); tf = tf if tf in TFS else s["timeframe"]; market = s["market"]
     sig = STATE["signals"].get(tf, {}).get(sym)
     if not sig: return {"ok": False, "error": "No signal data for this symbol yet"}
+    if sig.get("stale"): return {"ok": False, "error": f"{sym} {tf} data is stale (refresh pending) — try again in a few seconds"}
     ots = open_trades(sym)
     if ots:
         t = ots[0]
@@ -687,8 +1008,8 @@ async def spot_buy(sym, sig, s, mode):
     tid = log_trade(symbol=sym, side="LONG", mode=mode, tf=s["timeframe"], market="spot", leverage=1, qty=float(sell_qty), price=px,
                     quote=quote, tp=tp, sl=sl, atr=sig.get("atr"), status="OPEN", order_id=str(j.get("orderId")))
     st2, j2 = await signed("POST", "/api/v3/orderList/oco", {
-        "symbol": sym, "side": "SELL", "quantity": sell_qty, "aboveType": "LIMIT_MAKER", "abovePrice": q_step(tp, f["tick"]),
-        "belowType": "STOP_LOSS_LIMIT", "belowStopPrice": q_step(sl, f["tick"]), "belowPrice": q_step(sl * 0.998, f["tick"]),
+        "symbol": sym, "side": "SELL", "quantity": sell_qty, "aboveType": "LIMIT_MAKER", "abovePrice": q_price(tp, f["tick"]),
+        "belowType": "STOP_LOSS_LIMIT", "belowStopPrice": q_price(sl, f["tick"]), "belowPrice": q_price(sl * 0.998, f["tick"]),
         "belowTimeInForce": "GTC"})
     if st2 == 200:
         upd_trade(tid, oco_id=str(j2.get("orderListId")))
@@ -720,7 +1041,7 @@ async def futures_open(sym, direction, sig, s, mode):
     ids, errs = {}, []
     for kind, typ, trig in (("tp_algo", "TAKE_PROFIT_MARKET", tp), ("sl_algo", "STOP_MARKET", sl)):
         st2, j2 = await fsigned("POST", "/fapi/v1/algoOrder", {"algoType": "CONDITIONAL", "symbol": sym, "side": exit_side, "type": typ,
-                               "triggerPrice": q_step(trig, meta["tick"]), "closePosition": "true", "workingType": "MARK_PRICE",
+                               "triggerPrice": q_price(trig, meta["tick"]), "closePosition": "true", "workingType": "MARK_PRICE",
                                "priceProtect": "true"})
         if st2 == 200: ids[kind] = str(j2.get("algoId"))
         else: errs.append(f"{typ}: {j2.get('msg', st2)}")
@@ -751,6 +1072,8 @@ async def close_trade(t, reason):
     return {"ok": True, "msg": f"Closed {t['side']} {sym} @ {px:.6g}, PnL {pnl:+.3f} USDT"}
 
 def last_price(sym):
+    lp = best_price(sym)
+    if lp: return lp
     k = KL.get((sym, "1m")); return k[3][-1] if k else None
 
 async def trail_stop(t, px, s):
@@ -771,7 +1094,7 @@ async def trail_stop(t, px, s):
     if t.get("market") == "futures" and t.get("sl_algo"):
         meta = STATE["info"].get(sym, {})
         st, j = await fsigned("POST", "/fapi/v1/algoOrder", {"algoType": "CONDITIONAL", "symbol": sym, "side": "SELL" if d == 1 else "BUY",
-                              "type": "STOP_MARKET", "triggerPrice": q_step(new_sl, meta.get("tick", "0.0001")), "closePosition": "true",
+                              "type": "STOP_MARKET", "triggerPrice": q_price(new_sl, meta.get("tick", "0.0001")), "closePosition": "true",
                               "workingType": "MARK_PRICE", "priceProtect": "true"})
         if st == 200:
             await fsigned("DELETE", "/fapi/v1/algoOrder", {"algoId": t["sl_algo"]}); upd["sl_algo"] = str(j.get("algoId"))
@@ -830,7 +1153,7 @@ async def auto_trade():
         save_settings({"auto_trade": False}); await notify("Daily loss limit hit. Auto Trade switched OFF."); return
     if trades_today() >= s["max_trades_per_day"]: return
     for sym, a in sorted_signals(s["timeframe"]):
-        if not is_hot(a) or a["confidence"] < s["auto_min_confidence"]: break
+        if not is_hot(a) or a["confidence"] < s["auto_min_confidence"] or a.get("paused"): continue
         ots = open_trades(sym)
         if ots and ots[0]["side"] == a["signal"]: continue
         if not ots and len(open_trades()) >= s["max_open_positions"]: continue
@@ -839,6 +1162,63 @@ async def auto_trade():
         await notify((f"Auto {a['signal']} {sym}: " + r.get("msg", "")) if r["ok"] else f"Auto {a['signal']} {sym} failed: {r['error']}")
         if not r["ok"] and "-2015" in r.get("error", ""):
             save_settings({"auto_trade": False}); await notify("Auto Trade switched OFF: API key has no trading permission."); return
+
+# ---------------- PnL dashboard ----------------
+async def refresh_exchange_pnl(force=False):
+    """Futures realized PnL / fees / funding for the last 7 days from Binance income history (cached 120 s)."""
+    ex = STATE.get("ex_pnl")
+    if not BN_KEY or (ex and not force and time.time() - ex["ts"] < 120): return ex
+    out = {"ts": time.time(), "ok": False}
+    try:
+        tot = {}
+        for typ in ("REALIZED_PNL", "COMMISSION", "FUNDING_FEE"):
+            st, j = await fsigned("GET", "/fapi/v1/income", {"incomeType": typ, "startTime": int((time.time() - 7 * 86400) * 1000), "limit": 1000})
+            if st != 200: out["error"] = errtxt(st, j); break
+            tot[typ] = round(sum(float(x.get("income", 0)) for x in j.get("data", [])), 4)
+        else:
+            out.update(ok=True, realized_7d=tot["REALIZED_PNL"], fees_7d=tot["COMMISSION"], funding_7d=tot["FUNDING_FEE"],
+                       net_7d=round(sum(tot.values()), 4))
+    except Exception as e: out["error"] = f"{type(e).__name__}"
+    STATE["ex_pnl"] = out; return out
+
+def pnl_data():
+    now = time.time(); day0 = now - now % 86400
+    with db() as c:
+        rows = [dict(r) for r in c.execute("SELECT * FROM trades WHERE status IN ('OPEN','CLOSED') ORDER BY id DESC")]
+    def agg(since):
+        cl = [r for r in rows if r["status"] == "CLOSED" and r["pnl"] is not None and (r["closed_ts"] or 0) >= since]
+        w = sum(1 for r in cl if r["pnl"] > 0); l = sum(1 for r in cl if r["pnl"] < 0)
+        return {"realized": round(sum(r["pnl"] for r in cl), 4), "trades": len(cl), "wins": w, "losses": l,
+                "win_rate": round(100 * w / (w + l), 1) if w + l else None,
+                "best": round(max((r["pnl"] for r in cl), default=0), 4), "worst": round(min((r["pnl"] for r in cl), default=0), 4)}
+    opens = []
+    for r in rows:
+        if r["status"] != "OPEN": continue
+        px = last_price(r["symbol"]); d = 1 if r["side"] == "LONG" else -1
+        u = (px - r["price"]) * r["qty"] * d if px and r["price"] and r["qty"] else None
+        margin = (r["quote"] or 0) / max(1, r["leverage"] or 1)
+        opens.append({"id": r["id"], "symbol": r["symbol"], "side": r["side"], "market": r.get("market"), "qty": r["qty"], "entry": r["price"],
+                      "price": px, "tp": r["tp"], "sl": r["sl"], "unrealized": round(u, 4) if u is not None else None,
+                      "roe_pct": round(100 * u / margin, 2) if u is not None and margin else None, "ts": r["ts"]})
+    closed = [{"id": r["id"], "symbol": r["symbol"], "side": r["side"], "entry": r["price"], "exit": r["exit_price"], "pnl": r["pnl"],
+               "ts": r["ts"], "closed_ts": r["closed_ts"], "reason": r["error"], "mode": r["mode"]} for r in rows if r["status"] == "CLOSED"][:40]
+    return {"today": agg(day0), "7d": agg(now - 7 * 86400), "all": agg(0),
+            "unrealized": round(sum(o["unrealized"] or 0 for o in opens), 4), "open": opens, "closed": closed, "exchange": STATE.get("ex_pnl"),
+            "note": "Bot PnL = fill price difference x qty (fees/funding excluded). Exchange figures include fees & funding."}
+
+def pnl_text():
+    p = pnl_data(); lines = ["💵 PnL (USDT, bot trade history)"]
+    for k, lbl in (("today", "Aaj (UTC)"), ("7d", "7 din"), ("all", "All time")):
+        a = p[k]; wr = f"{a['win_rate']}%" if a["win_rate"] is not None else "n/a"
+        lines.append(f"{lbl}: {a['realized']:+.3f} · {a['trades']} trades · W {a['wins']} / L {a['losses']} · win {wr}")
+    lines.append(f"Unrealized (open {len(p['open'])}): {p['unrealized']:+.3f}")
+    for o in p["open"][:10]:
+        lines.append(f"  {o['side']} {o['symbol']} @ {o['entry']:.6g} → {o['price'] or 0:.6g} · " + (f"{o['unrealized']:+.3f}" if o["unrealized"] is not None else "n/a"))
+    ex = p["exchange"]
+    if ex and ex.get("ok"): lines.append(f"Binance futures 7d: realized {ex['realized_7d']:+.3f} · fees {ex['fees_7d']:+.3f} · funding {ex['funding_7d']:+.3f} · net {ex['net_7d']:+.3f}")
+    elif ex: lines.append(f"Binance futures income: n/a ({ex.get('error', '')[:80]})")
+    lines.append("Bot PnL mein fees/funding shamil nahi.")
+    return "\n".join(lines)
 
 # ---------------- Telegram ----------------
 TG = f"https://api.telegram.org/bot{TG_TOKEN}"
@@ -871,9 +1251,11 @@ def signals_text(tf):
     for sym, a in hot:
         ic = "🟢" if a["signal"] == "LONG" else "🔴"
         ch = STATE["tickers"].get(sym, {}).get("chg")
-        lines.append(f"{ic} {a['signal']} {sym} {a['confidence']}%{' ⚡' if a['strong'] else ''}" + (f" ({ch:+.1f}% 24h)" if ch is not None else ""))
+        lines.append(f"{ic} {a['signal']} {sym} {a['confidence']}%{' 🔥STRONG' if a['strong'] else ''}{' ⏸' if a.get('paused') else ''}" + (f" ({ch:+.1f}% 24h)" if ch is not None else ""))
         lines.append(f"   E {fmt_price(sym, a['entry'])} | TP {fmt_price(sym, a['tp'])} | SL {fmt_price(sym, a['sl'])}")
-    lines += ["", "Confidence = indicator agreement, not win probability. ⚡ = 1m/5m/15m agree."]
+    m = STATE.get("mood") or {}
+    if m: lines.insert(1, f"Mood {m.get('label')} · BTC 5m {m.get('btc_move_5m') if m.get('btc_move_5m') is not None else 'n/a'}%")
+    lines += ["", "Confidence = indicator agreement, not win probability. 🔥STRONG = 1m+5m+15m agree, 1h not opposing. ⏸ = BTC guard pause."]
     return "\n".join(lines)
 
 def signals_kb(tf):
@@ -898,11 +1280,15 @@ async def handle_cb(cq):
         txt = (f"Confirm {d} {sym} at market?\n{mk.upper()}" + (f" {s['leverage']}x isolated" if mk == "futures" else "") +
                f", margin {s['order_size_usdt']} USDT\nTP {fmt_price(sym, a.get('tp', 0))} / SL {fmt_price(sym, a.get('sl', 0))}")
         await tg("sendMessage", chat_id=m["chat"]["id"], text=txt, reply_markup={"inline_keyboard": [[
-            {"text": f"✅ Yes, {d}", "callback_data": f"do:{d}:{sym}"}, {"text": "❌ Cancel", "callback_data": "cancel"}]]})
+            {"text": f"✅ Yes, {d}", "callback_data": f"do:{d}:{sym}:{tf}:{int(time.time())}"}, {"text": "❌ Cancel", "callback_data": "cancel"}]]})
         await tg("answerCallbackQuery", callback_query_id=cq["id"]); return
-    if parts[0] == "do" and len(parts) == 3 and parts[1] in ("LONG", "SHORT") and parts[2] in STATE["info"]:
+    if parts[0] == "do" and len(parts) in (3, 5) and parts[1] in ("LONG", "SHORT") and parts[2] in STATE["info"]:
+        if len(parts) != 5 or not parts[4].isdigit() or time.time() - int(parts[4]) > 120:
+            await tg("answerCallbackQuery", callback_query_id=cq["id"], text="Expired")
+            await tg("editMessageText", chat_id=m["chat"]["id"], message_id=m["message_id"], text="⌛ Confirmation expired (2 min). Price badal chuki hogi — /signals se dobara karein.")
+            return
         await tg("answerCallbackQuery", callback_query_id=cq["id"], text="Sending order…")
-        r = await execute(parts[2], parts[1], "manual")
+        async with TRADE_LOCK: r = await execute(parts[2], parts[1], "manual", parts[3])
         await tg("editMessageText", chat_id=m["chat"]["id"], message_id=m["message_id"], text=("✅ " + r["msg"]) if r["ok"] else ("❌ " + r["error"])); return
     if parts[0] == "cancel":
         await tg("editMessageText", chat_id=m["chat"]["id"], message_id=m["message_id"], text="Cancelled.")
@@ -919,7 +1305,11 @@ def key_lines(kc):
             f"{'OK' if kc.get('futures_order_test_ok') else 'FAIL'})\n  Withdrawals: {'ENABLED ⚠️' if kc.get('withdrawals_enabled') else 'disabled ✅'}")
 
 HELP_TEXT = ("⚡ Scalping Bot — commands\n"
-    "/signals [1m|5m|15m] — 80%+ LONG/SHORT setups (entry/TP/SL)\n"
+    "/signals [1m|5m|15m|strong] — 80%+ LONG/SHORT setups (entry/TP/SL)\n"
+    "/strong — 🔥 STRONG confluence: 1m+5m+15m same direction, 1h not opposing\n"
+    "/market — market mood: BTC trend, LONG vs SHORT %, BTC sudden-move guard\n"
+    "/pnl — realized / unrealized PnL: today, 7d, all time, wins/losses\n"
+    "/health — data age per timeframe, WebSocket, rate limit, errors, uptime\n"
     "/alerts on|off|80|85|90|fav|all — auto alerts (default ON, 80%)\n"
     "/stats — paper win-rate (24h / 7d, per timeframe & side)\n"
     "/risk — risk guard: daily loss, open trades, trades/day\n"
@@ -940,6 +1330,10 @@ def extra_command(cmd, args):
     if cmd == "/help": return HELP_TEXT
     if cmd == "/stats": return stats_text()
     if cmd == "/risk": return risk_text()
+    if cmd == "/strong" or (cmd == "/signals" and args and args[0].lower() == "strong"): return strong_text()
+    if cmd == "/market": return mood_text()
+    if cmd == "/pnl": return pnl_text()
+    if cmd == "/health": return health_text()
     if cmd == "/alerts":
         a = (args[0].lower() if args else "")
         if a in ("on", "off"): s = save_settings({"alerts": a == "on"})
@@ -983,6 +1377,7 @@ async def handle(msg):
     if frm.get("id") != o:
         await tg("sendMessage", chat_id=chat["id"], text="⛔ This is a private bot."); return
     s = get_settings(); cid = chat["id"]
+    if cmd == "/pnl": await refresh_exchange_pnl()
     reply = extra_command(cmd, args)
     if reply is not None:
         await tg("sendMessage", chat_id=cid, text=reply[:4000]); return
@@ -990,7 +1385,7 @@ async def handle(msg):
         kb = open_btn()
         await tg("sendMessage", chat_id=cid, text=("⚡ Scalping Bot ready.\nScanning the top ~200 Binance USDT-M futures coins on 1m / 5m / 15m "
                  "with EMA 9/21/50, RSI, MACD, VWAP, Bollinger, volume and candle patterns, plus higher-timeframe confirmation.\n\n"
-                 "/signals · /alerts · /stats · /risk · /fav · /balance · /auto · /status · /help\n\nAuto Trade is OFF by default. Alerts ON (80%+). "
+                 "/signals · /strong · /market · /pnl · /health · /alerts · /stats · /risk · /fav · /balance · /auto · /status · /help\n\nAuto Trade is OFF by default. Alerts ON (80%+). "
                  "Confidence = indicator agreement, not win probability.") + ("" if kb else "\n(Mini app offline; use /signals buttons.)"),
                  **({"reply_markup": kb} if kb else {}))
     elif cmd == "/signals":
@@ -1037,25 +1432,29 @@ async def bot_loop():
         log.info("bot token changed or first run: update offset reset")
     offset = kv_get("tg_offset", 0)
     await tg("setMyCommands", commands=[{"command": "start", "description": "Open the scalping app"},
-        {"command": "signals", "description": "80%+ signals: /signals 1m|5m|15m"}, {"command": "balance", "description": "Spot & futures balances"},
+        {"command": "signals", "description": "80%+ signals: /signals 1m|5m|15m|strong"},
+        {"command": "strong", "description": "STRONG 1m+5m+15m confluence"}, {"command": "market", "description": "Market mood + BTC guard"},
+        {"command": "pnl", "description": "PnL today / 7d / all"}, {"command": "health", "description": "Data freshness & health"}, {"command": "balance", "description": "Spot & futures balances"},
         {"command": "alerts", "description": "Alerts on|off|80|85|90|fav|all"}, {"command": "stats", "description": "Paper win-rate"},
         {"command": "risk", "description": "Risk guard status"}, {"command": "fav", "description": "Favorites: add|remove|list"},
         {"command": "auto", "description": "Auto trade on|off"}, {"command": "status", "description": "Bot, scanner & key status"},
         {"command": "help", "description": "All commands"}])
     while True:
         try:
+            STATE["hb"]["bot"] = time.time()
             j = await tg("getUpdates", offset=offset, timeout=25, allowed_updates=["message", "callback_query"])
-            STATE["last_poll"] = time.time(); STATE["poll_ok"] = bool(j.get("ok"))
+            STATE["last_poll"] = time.time(); STATE["poll_ok"] = bool(j.get("ok")); STATE["hb"]["bot"] = time.time()
             if not j.get("ok"):
-                add_err(f"getUpdates: {j.get('description')}"); await asyncio.sleep(5); continue
+                add_err(f"getUpdates: {j.get('description')}", "telegram"); await asyncio.sleep(5); continue
             for u in j["result"]:
                 offset = u["update_id"] + 1; kv_set("tg_offset", offset)
                 try:
                     if "callback_query" in u: await handle_cb(u["callback_query"])
                     if "message" in u: await handle(u["message"])
                 except Exception as e: add_err(f"handler: {type(e).__name__}: {e}")
+        except asyncio.CancelledError: raise
         except Exception as e:
-            add_err(f"bot loop: {type(e).__name__}"); await asyncio.sleep(5)
+            add_err(f"bot loop: {type(e).__name__}", "telegram"); await asyncio.sleep(5)
 
 async def set_menu_button():
     u = webapp_url()
@@ -1096,17 +1495,22 @@ def auth(request: Request):
 @asynccontextmanager
 async def lifespan(app):
     global client
-    init_db(); client = httpx.AsyncClient(limits=httpx.Limits(max_connections=60, max_keepalive_connections=40), timeout=httpx.Timeout(15, pool=60))
+    init_db(); client = httpx.AsyncClient(limits=httpx.Limits(max_connections=100, max_keepalive_connections=80), timeout=httpx.Timeout(15, pool=60))
     STATE["webapp_url"] = os.environ.get("WEBAPP_URL") or (open(URL_FILE).read().strip() if os.path.exists(URL_FILE) else "") or None
     await detect_source()
-    tasks = [asyncio.create_task(scanner_loop()), asyncio.create_task(htf_loop()), asyncio.create_task(tickers_loop())]
+    WATCH.update({"tickers": (tickers_loop, 200), "ws": (ws_loop, 120), "live": (live_loop, 45)})
+    for tf in ALL_TFS: WATCH[f"kl_{tf}"] = ((lambda tf=tf: kline_loop(tf)), STALE_MULT * FETCH_EVERY[tf] + 120)
+    for n in list(WATCH): start_task(n)
     try: await check_key()
     except Exception as e: add_err(f"key check: {e}")
     if not DISABLE_BOT:
         me = await tg("getMe"); STATE["bot_username"] = (me.get("result") or {}).get("username")
-        await set_menu_button(); tasks.append(asyncio.create_task(bot_loop()))
+        await set_menu_button(); WATCH["bot"] = (bot_loop, 150); start_task("bot")
+    wd = asyncio.create_task(watchdog())
     yield
-    for t in tasks: t.cancel()
+    wd.cancel()
+    for t in TASKS.values(): t.cancel()
+    await asyncio.gather(wd, *TASKS.values(), return_exceptions=True)
     await client.aclose()
 
 J = JSONResponse
@@ -1118,15 +1522,19 @@ def row(sym, a):
             "hot": is_hot(a), "strong": a["strong"], "price": fmt_price(sym, a["price"]), "entry": fmt_price(sym, a["entry"]),
             "tp": fmt_price(sym, a["tp"]), "sl": fmt_price(sym, a["sl"]), "change24h": t.get("chg"), "qv": t.get("qv"),
             "funding": round(STATE["funding"][sym] * 100, 4) if sym in STATE["funding"] else None,
-            "flags": a.get("flags", []), "filtered": a.get("filtered", False), "fav": sym in FAVSET}
+            "flags": a.get("flags", []), "filtered": a.get("filtered", False), "fav": sym in FAVSET,
+            "confluence": bool(a.get("strong")), "stale": bool(a.get("stale")), "age": a.get("age"), "paused": bool(a.get("paused")),
+            "price_src": a.get("price_src")}
 
 async def index(request): return FileResponse(os.path.join(BASE, "static", "index.html"), headers={"Cache-Control": "no-store"})
 
 async def health(request):
-    return J({"ok": True, "updated": STATE["updated"], "source": STATE["source"], "coins": len(STATE["universe"]),
-              "scan": STATE["scan"], "weight": STATE["weight"], "rate_limit_hits": STATE["rate_limit_hits"],
+    h = health_data()
+    return J({"ok": not h["incidents"], "updated": STATE["updated"], "source": STATE["source"], "coins": len(STATE["universe"]),
+              "coverage": STATE["coverage"], "max_age_s": {tf: d["max_age_s"] for tf, d in h["tf"].items()}, "ws": h["ws"]["status"],
+              "weight": STATE["weight"], "weight_peak": STATE["weight_peak"], "rate_limit_hits": STATE["rate_limit_hits"],
               "fetch_errors": STATE["fetch_errors"], "requests": STATE["requests"], "bot_poll_ok": STATE["poll_ok"],
-              "funding_symbols": len(STATE["funding"]), "recent_errors": STATE["errors"][:3]})
+              "funding_symbols": len(STATE["funding"]), "incidents": len(h["incidents"])})
 
 async def api_signals(request: Request):
     auth(request); tf = request.query_params.get("tf", "5m")
@@ -1137,7 +1545,8 @@ async def api_signals(request: Request):
     rows.sort(key=lambda r: not r["fav"])   # stable: favorites pinned on top, keeping hot-first order
     return J({"tf": tf, "updated": STATE["updated"], "refresh_sec": FETCH_EVERY["1m"], "source": STATE["source"], "count": len(rows),
               "hot": sum(1 for r in rows if r["hot"]), "long": sum(1 for r in rows if r["signal"] == "LONG"),
-              "short": sum(1 for r in rows if r["signal"] == "SHORT"), "signals": rows})
+              "short": sum(1 for r in rows if r["signal"] == "SHORT"), "strong": sum(1 for r in rows if r["confluence"] and not r["filtered"]),
+              "stale": sum(1 for r in rows if r["stale"]), "mood": STATE.get("mood"), "live_src": STATE["live_src"], "signals": rows})
 
 async def api_signal(request: Request):
     auth(request); tf = request.query_params.get("tf", "5m"); sym = request.query_params.get("symbol", "")
@@ -1176,7 +1585,7 @@ async def api_trade(request: Request):
     if sym not in STATE["info"] or d not in ("LONG", "SHORT") or body.get("confirm") is not True:
         raise HTTPException(400, "Bad request")
     if TEST_MODE: return J({"ok": False, "error": "Test mode: no orders placed"})
-    return J(await execute(sym, d, "manual"))
+    async with TRADE_LOCK: return J(await execute(sym, d, "manual", body.get("tf")))
 
 async def api_stats(request: Request):
     auth(request)
@@ -1192,11 +1601,18 @@ async def api_fav(request: Request):
     if not body.get("on"): favs = [f for f in favs if f != sym]
     kv_set("favorites", favs); return J({"favorites": favs})
 
+async def api_pnl(request: Request):
+    auth(request); await refresh_exchange_pnl(); return J(pnl_data())
+
+async def api_health(request: Request):
+    auth(request); return J(health_data())
+
 async def http_error(request, exc): return J({"detail": exc.detail}, status_code=exc.status_code)
 
 app = Starlette(routes=[
     Route("/", index), Route("/healthz", health), Route("/api/signals", api_signals), Route("/api/signal", api_signal),
     Route("/api/history", api_history), Route("/api/settings", api_settings, methods=["GET", "POST"]),
     Route("/api/trade", api_trade, methods=["POST"]), Route("/api/stats", api_stats), Route("/api/fav", api_fav, methods=["POST"]),
+    Route("/api/pnl", api_pnl), Route("/api/health", api_health),
     Mount("/static", StaticFiles(directory=os.path.join(BASE, "static")), name="static"),
 ], lifespan=lifespan, exception_handlers={HTTPException: http_error})

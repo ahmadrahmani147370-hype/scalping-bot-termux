@@ -38,6 +38,32 @@ Near-black graphite UI with electric-lime LONG, coral-rose SHORT, gold STRONG ac
   (30 min cooldown) plus a recovery message. `/health`, Health tab.
 - Indicators verified against TA-Lib on live Binance data (EMA / RSI / ATR / Bollinger / VWAP / MACD match to ~1e-11 relative).
 
-Commands: /start /signals [1m|5m|15m|strong] /strong /market /pnl /health /alerts /stats /risk /fav /balance /auto /status /help
+Commands: /start /signals [1m|5m|15m|strong] /strong /market /pnl /health /alerts /stats /paper /risk /fav /balance /auto /status /help
+
+## Paper trading (auto, simulated)
+- **Auto paper trades** (default OFF; `/paper on` to enable): when a signal newly reaches **85%+** on 1m / 5m / 15m, the bot opens a simulated
+  **$500 USDT** position in the signal direction. **No Binance order is ever placed**; real Auto Trade stays OFF and is separate.
+- Same quality gates as alerts: no stale data, no ⚠ funding / low-volume coins, no BTC-guard paused side, and no burst at startup
+  (setups already 85%+ when the bot starts are skipped; only fresh crossings open).
+- One open paper trade per coin + timeframe. Uses the signal's ATR TP/SL, plus breakeven / trailing (same settings as real trades).
+  Settled on candles like the win-rate tracker: TP / SL / TRAIL (moved stop) / EXPIRED after 60 candles; if TP and SL touch in one candle it counts as SL.
+- PnL = price move x $500 notional (fees / funding excluded). Stored in the same `paper` table (rows with `trade=1`); the 80%+ win-rate stays unchanged.
+- Telegram message on open and on close (PnL in USDT and %). `/paper` shows open + recent closed and 24h / 7d / all PnL; `/stats` has a summary line.
+  `/paper on|off`, `/paper 90` (threshold 80-99), `/paper size 500`. Mini App: Stats tab "Paper trades"; Settings has the switch, threshold and size.
+- Tests: `.venv/bin/python -m unittest discover -s tests -v`
 
 Only ONE copy of the bot may run per Telegram token.
+
+## ⚡ ULTRA STRONG tier (paper/alerts only)
+- Strictest filter, evaluated once per **closed** candle on 1m / 5m / 15m: 90%+ confidence, STRONG (1m+5m+15m same side),
+  1h trend aligned (>= 0.5), ATR >= 0.4% of price, volume spike in the signal direction, RSI 30-70, not stale / filtered / BTC-guard paused.
+- Ranked by score (confidence + 1h/15m/BTC-1h trend alignment, small bonus for 15m/5m); **max 5 per UTC day** across all coins/TFs,
+  one ULTRA per coin per 4h and never while one is open (`ultra_max_per_day`, `ultra_cooldown_h`). No burst after a restart.
+- Telegram alert per ULTRA (`/ultra on|off`), `/ultra` lists today's/recent ULTRA + its win rate; `/stats` shows it separately.
+  Mini App: ⚡ ULTRA badge + chip filter, ULTRA panel on the Strong tab, ULTRA block on Stats.
+- Tracked in the `paper` table with `tier='ULTRA'` (trade=0, fixed TP/SL = `ultra_tp_mult`/`ultra_sl_mult` x ATR, default 1.5/1.0,
+  same floors as normal signals, checked from the candle after the close). Standard /stats excludes these rows.
+- Honest backtest (74 USDT-M coins, Sep 5 - Nov 9 2026, 0.12% fees+slippage per trade): ~5/day, win rate ~33-37%,
+  expectancy after fees negative (about -0.2% per trade). No filter combination tested had a stable positive edge. Not a profit signal.
+- Real orders: never from ULTRA. Auto Trade stays OFF; $500 paper trades stay OFF.
+- Offline backtester: `backtest/` (see backtest/README.md).

@@ -60,7 +60,12 @@ DEFAULT_SETTINGS = {"timeframe": "5m", "market": "futures", "leverage": 3, "orde
                     "alerts_fav_only": False, "alert_cooldown_min": 15, "max_alerts_per_min": 10,
                     "max_trades_per_day": 20, "trailing": True, "be_trigger_atr": 0.5, "trail_atr": 1.0,
                     "liq_filter": True, "max_funding_pct": 0.1, "min_qv_musd": 20.0,
-                    "btc_guard": True, "btc_move_pct": 1.0, "btc_pause_min": 15, "strong_min_conf": 60}
+                    "btc_guard": True, "btc_move_pct": 1.0, "btc_pause_min": 15, "strong_min_conf": 60,
+                    "paper_trade": False, "paper_min_conf": 85, "paper_size_usdt": 500.0,   # paper = simulated, never real orders
+                    "ultra_alerts": True, "ultra_max_per_day": 5, "ultra_cooldown_h": 4.0, "ultra_tp_mult": 0.75, "ultra_sl_mult": 3.0}
+# ULTRA tier (picked with the offline backtest, see README): strictest confluence, evaluated once per CLOSED candle,
+# ranked by ultra_score, max ultra_max_per_day per UTC day across all coins/TFs, one per symbol per ultra_cooldown_h.
+ULTRA_MIN_CONF = 90; ULTRA_H1 = 0.5; ULTRA_MIN_ATR_PCT = 0.4; ULTRA_RSI = (30, 70)
 PAPER_EXPIRE = 60                          # paper signals expire after 60 candles of their timeframe
 TF_SEC = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600}
 MAX_LEVERAGE = 10
@@ -82,6 +87,12 @@ def init_db():
         c.execute("""CREATE TABLE IF NOT EXISTS paper(id INTEGER PRIMARY KEY, ts REAL, symbol TEXT, tf TEXT, side TEXT,
             confidence INTEGER, entry REAL, tp REAL, sl REAL, status TEXT DEFAULT 'OPEN', closed_ts REAL, exit REAL, last_ot REAL)""")
         c.execute("CREATE INDEX IF NOT EXISTS paper_status ON paper(status)")
+        pcols = {r[1] for r in c.execute("PRAGMA table_info(paper)")}
+        # trade=1 rows are simulated $-sized paper positions (same ledger as the win-rate tracker, which uses trade=0 rows)
+        for col, typ in (("trade", "INTEGER DEFAULT 0"), ("notional", "REAL"), ("qty", "REAL"), ("atr", "REAL"), ("sl0", "REAL"),
+                         ("be_done", "INTEGER DEFAULT 0"), ("pnl", "REAL"), ("pnl_pct", "REAL"), ("reason", "TEXT"),
+                         ("tier", "TEXT"), ("score", "REAL")):   # tier='ULTRA' rows = separate ULTRA win-rate tracker
+            if col not in pcols: c.execute(f"ALTER TABLE paper ADD COLUMN {col} {typ}")
         cols = {r[1] for r in c.execute("PRAGMA table_info(trades)")}
         for col, typ in (("market", "TEXT"), ("leverage", "INTEGER"), ("tp_algo", "TEXT"), ("sl_algo", "TEXT"),
                          ("atr", "REAL"), ("be_done", "INTEGER"), ("sl_moved_ts", "REAL")):
@@ -126,6 +137,9 @@ def save_settings(upd):
     s["max_funding_pct"] = max(0.01, min(s["max_funding_pct"], 2)); s["min_qv_musd"] = max(0, min(s["min_qv_musd"], 10000))
     s["strong_min_conf"] = max(50, min(s["strong_min_conf"], 95))
     s["btc_move_pct"] = max(0.2, min(s["btc_move_pct"], 10)); s["btc_pause_min"] = max(1, min(s["btc_pause_min"], 240))
+    s["paper_min_conf"] = max(HOT, min(s["paper_min_conf"], 99)); s["paper_size_usdt"] = max(10.0, min(s["paper_size_usdt"], 100000.0))
+    s["ultra_max_per_day"] = max(1, min(s["ultra_max_per_day"], 10)); s["ultra_cooldown_h"] = max(0.5, min(s["ultra_cooldown_h"], 48.0))
+    s["ultra_tp_mult"] = max(0.3, min(s["ultra_tp_mult"], 10)); s["ultra_sl_mult"] = max(0.3, min(s["ultra_sl_mult"], 5))
     kv_set("settings", s); return s
 
 # ---------------- indicators ----------------
@@ -278,7 +292,8 @@ STATE = {"signals": {}, "raw": {}, "tickers": {}, "updated": 0, "errors": [], "k
          "gaps": {}, "align_retries": 0, "retries": 0, "max_age_seen": {}, "live_src": None, "rest_price_polls": 0,
          "ws": {"status": "starting", "since": None, "last_msg": 0, "msgs": 0, "reconnects": 0, "up_s": 0.0, "start": time.time(), "url": None},
          "hb": {}, "incidents": {}, "inc_log": [], "inc_last_notify": {}, "restarts": {}, "err_count": {}, "start": time.time(),
-         "mood": {}, "pause": {"LONG": 0, "SHORT": 0}, "ready": False, "ex_pnl": None}
+         "mood": {}, "pause": {"LONG": 0, "SHORT": 0}, "ready": False, "ex_pnl": None, "paper_prev": {},
+         "ultra_ot": {}, "ultra_open": set()}
 KL = {}                     # (sym, tf) -> (o, h, l, c, v, open_times)
 KTS = {}                    # (sym, tf) -> local time of the last successful fetch
 LIVE = {}                   # sym -> (live price, local receive time)
@@ -442,6 +457,7 @@ def compute_all(s):
         for tf in TFS:
             if tf not in raw: continue
             a = combine(raw, tf, s)
+            a["tr"] = {t: round(raw[t]["trend"], 3) for t in ALL_TFS if t in raw}
             a["stale"] = stale[tf] or any(stale.get(h, True) for h in HTF[tf])
             a["age"] = round(now - KTS.get((sym, tf), 0), 1); a["price_src"] = "live" if lp else "kline"
             out[tf][sym] = a
@@ -457,6 +473,7 @@ def compute_all(s):
                 a = out[tf][sym]; a["strong"] = strong; a["flags"] = flags
                 a["filtered"] = bool(flags) and s["liq_filter"]
                 a["paused"] = side_paused(a["signal"], s, now)
+                a["ultra"] = (sym, tf) in STATE["ultra_open"]
     STATE["signals"] = out; STATE["updated"] = time.time()
     STATE["mood"] = market_mood(out, btc_raw, s, now)
     STATE["scan"]["compute_s"] = round(time.time() - t0, 3)
@@ -526,12 +543,15 @@ async def record_and_alert(s):
                 with db() as c:
                     c.execute("INSERT INTO signals(ts,symbol,tf,signal,confidence,price,entry,tp,sl,strong) VALUES(?,?,?,?,?,?,?,?,?,?)",
                               (now, sym, tf, cur, a["confidence"], a["price"], a["entry"], a["tp"], a["sl"], int(a["strong"])))
-                    dup = c.execute("SELECT 1 FROM paper WHERE status='OPEN' AND symbol=? AND tf=? AND side=?", (sym, tf, cur)).fetchone()
+                    dup = c.execute("SELECT 1 FROM paper WHERE status='OPEN' AND COALESCE(trade,0)=0 AND COALESCE(tier,'')!='ULTRA' AND symbol=? AND tf=? AND side=?",
+                                    (sym, tf, cur)).fetchone()
                     if not dup:   # one open paper position per coin+tf+side (no double counting on 79/80 flicker)
                         c.execute("INSERT INTO paper(ts,symbol,tf,side,confidence,entry,tp,sl,last_ot) VALUES(?,?,?,?,?,?,?,?,?)",
                                   (now, sym, tf, cur, a["confidence"], a["entry"], a["tp"], a["sl"], last_ot))
                 fresh.append((sym, tf, a))
             STATE["hot_prev"][k] = cur
+    opened = open_paper_trades(s, now)
+    if opened: await notify(paper_open_text(opened, s))
     if not s["alerts"] or not fresh: return
     favs = set(favorites()); cd = s["alert_cooldown_min"] * 60
     STATE["alert_times"] = [t for t in STATE["alert_times"] if now - t < 60]
@@ -554,13 +574,60 @@ async def record_and_alert(s):
     if skipped: lines.append(f"(+{skipped} aur — per-minute limit; /signals dekhein)")
     await notify("\n".join(lines))
 
-def update_paper():
-    """Mark paper signals TP / SL / EXPIRED from cached candles (candles that opened after the signal)."""
-    now = time.time(); changes = 0
+def paper_qualifies(a, s):
+    """Signal good enough for an automatic PAPER trade: same quality gates as alerts (hot = not stale / not ⚠ filtered),
+    not paused by the BTC guard, and confidence >= paper threshold (default 85%)."""
+    return bool(s["paper_trade"]) and is_hot(a) and not a.get("paused") and a["confidence"] >= s["paper_min_conf"]
+
+def open_paper_trades(s, now=None):
+    """Open one simulated position (notional = paper_size_usdt) per symbol+tf when a signal newly qualifies.
+    Never touches Binance. Returns the opened rows."""
+    now = now or time.time(); opened = []
+    for tf in TFS:
+        for sym, a in STATE["signals"].get(tf, {}).items():
+            k = (sym, tf); cur = a["signal"] if paper_qualifies(a, s) else None
+            prev = STATE["paper_prev"].get(k); STATE["paper_prev"][k] = cur
+            if not cur or prev == cur or not a.get("entry"): continue
+            with db() as c:
+                if c.execute("SELECT 1 FROM paper WHERE status='OPEN' AND trade=1 AND symbol=? AND tf=?", (sym, tf)).fetchone(): continue
+                k1 = KL.get((sym, tf)); last_ot = k1[5][-1] if k1 and len(k1) > 5 else now
+                notional = float(s["paper_size_usdt"]); qty = notional / a["entry"]
+                rid = c.execute("INSERT INTO paper(ts,symbol,tf,side,confidence,entry,tp,sl,last_ot,trade,notional,qty,atr,sl0,be_done) "
+                                "VALUES(?,?,?,?,?,?,?,?,?,1,?,?,?,?,0)",
+                                (now, sym, tf, cur, a["confidence"], a["entry"], a["tp"], a["sl"], last_ot, notional, qty,
+                                 a.get("atr"), a["sl"])).lastrowid
+            opened.append({"id": rid, "symbol": sym, "tf": tf, "side": cur, "confidence": a["confidence"], "entry": a["entry"],
+                           "tp": a["tp"], "sl": a["sl"], "notional": notional, "qty": qty, "strong": a.get("strong")})
+    return opened
+
+def paper_pnl(p, exit_px):
+    d = 1 if p["side"] == "LONG" else -1
+    pct = 100 * d * (exit_px - p["entry"]) / p["entry"]
+    return round((p["notional"] or 0) * pct / 100, 4), round(pct, 3)
+
+def paper_trail(p, hi, lo, s):
+    """Breakeven + ATR trailing for a paper position, same rules as real trades (trail_stop), driven by a CLOSED candle."""
+    a = p.get("atr") or 0
+    if not s["trailing"] or a <= 0: return
+    d = 1 if p["side"] == "LONG" else -1; entry = p["entry"]; ext = hi if d == 1 else lo; sl = p["sl"]; new_sl = None
+    trig = min(s["be_trigger_atr"] * a, 0.5 * abs(p["tp"] - entry))
+    if not p.get("be_done") and (ext - entry) * d >= trig and (entry - sl) * d > 0:
+        new_sl = entry; p["be_done"] = 1
+    if p.get("be_done"):
+        cand = ext - d * s["trail_atr"] * a
+        if (cand - (new_sl if new_sl is not None else sl)) * d > 0.2 * a: new_sl = cand
+    if new_sl is not None and (new_sl - sl) * d > 0: p["sl"] = new_sl
+
+def update_paper(closed_out=None, s=None):
+    """Mark paper rows TP / SL / EXPIRED from cached candles (candles that opened after the signal).
+    Signal rows (trade=0) keep fixed TP/SL for the win-rate. Paper trades (trade=1) also trail/breakeven and get PnL;
+    a stop hit after the SL was moved is TRAIL. Closed paper trades are appended to closed_out."""
+    now = time.time(); changes = 0; s = s or get_settings()
     with db() as c:
         rows = [dict(r) for r in c.execute("SELECT * FROM paper WHERE status='OPEN'")]
         for p in rows:
             k = KL.get((p["symbol"], p["tf"])); status = None; exit_px = None; last_ot = p["last_ot"] or p["ts"]
+            is_trade = bool(p.get("trade")); sl_before = p["sl"]
             if k and len(k) > 5:
                 d = 1 if p["side"] == "LONG" else -1
                 for i, ot in enumerate(k[5]):
@@ -568,22 +635,91 @@ def update_paper():
                     hi, lo = k[1][i], k[2][i]
                     sl_hit = (lo <= p["sl"]) if d == 1 else (hi >= p["sl"])
                     tp_hit = (hi >= p["tp"]) if d == 1 else (lo <= p["tp"])
-                    if sl_hit: status, exit_px = "SL", p["sl"]; break        # conservative: SL first if both in one candle
+                    if sl_hit:                                                 # conservative: SL first if both in one candle
+                        moved = is_trade and p.get("sl0") is not None and abs(p["sl"] - p["sl0"]) > 1e-12
+                        status, exit_px = ("TRAIL" if moved else "SL"), p["sl"]; break
                     if tp_hit: status, exit_px = "TP", p["tp"]; break
-                    if i < len(k[5]) - 1: last_ot = ot                        # only advance past fully closed candles
+                    if i < len(k[5]) - 1:                                      # only advance past fully closed candles
+                        last_ot = ot
+                        if is_trade: paper_trail(p, hi, lo, s)
             if not status and now - p["ts"] > PAPER_EXPIRE * TF_SEC[p["tf"]]:
                 status = "EXPIRED"; exit_px = k[3][-1] if k else None
             if status:
-                c.execute("UPDATE paper SET status=?, closed_ts=?, exit=? WHERE id=?", (status, now, exit_px, p["id"])); changes += 1
-            elif last_ot != p["last_ot"]:
-                c.execute("UPDATE paper SET last_ot=? WHERE id=?", (last_ot, p["id"]))
+                if is_trade and exit_px:
+                    p["pnl"], p["pnl_pct"] = paper_pnl(p, exit_px)
+                    c.execute("UPDATE paper SET status=?, closed_ts=?, exit=?, sl=?, be_done=?, pnl=?, pnl_pct=? WHERE id=?",
+                              (status, now, exit_px, p["sl"], p.get("be_done") or 0, p["pnl"], p["pnl_pct"], p["id"]))
+                    p.update(status=status, exit=exit_px, closed_ts=now)
+                    if closed_out is not None: closed_out.append(p)
+                else:
+                    c.execute("UPDATE paper SET status=?, closed_ts=?, exit=? WHERE id=?", (status, now, exit_px, p["id"]))
+                changes += 1
+            elif last_ot != p["last_ot"] or p["sl"] != sl_before:
+                c.execute("UPDATE paper SET last_ot=?, sl=?, be_done=? WHERE id=?", (last_ot, p["sl"], p.get("be_done") or 0, p["id"]))
     return changes
 
-def paper_stats():
-    now = time.time(); out = {}
+def paper_open_text(opened, s):
+    lines = [f"🧪 PAPER trade OPEN ({len(opened)}) — ${s['paper_size_usdt']:.0f} per signal, {s['paper_min_conf']}%+ · asal paise nahi"]
+    for o in opened:
+        lines.append(f"{'🟢' if o['side'] == 'LONG' else '🔴'} {o['side']} {o['symbol']} [{o['tf']}] {o['confidence']}%{' 🔥' if o.get('strong') else ''}"
+                     f" · ${o['notional']:.0f}\n   Entry {fmt_price(o['symbol'], o['entry'])} | TP {fmt_price(o['symbol'], o['tp'])} | SL {fmt_price(o['symbol'], o['sl'])}")
+    return "\n".join(lines)
+
+def paper_close_text(closed):
+    lbl = {"TP": "✅ TP", "SL": "❌ SL", "TRAIL": "🔒 Trailing/BE stop", "EXPIRED": "⌛ Expired (60 candles)"}
+    lines = [f"🧪 PAPER trade CLOSED ({len(closed)}) — simulated, fees shamil nahi"]
+    for p in closed:
+        lines.append(f"{lbl.get(p['status'], p['status'])} · {p['side']} {p['symbol']} [{p['tf']}] · ${p['notional']:.0f}\n"
+                     f"   {fmt_price(p['symbol'], p['entry'])} → {fmt_price(p['symbol'], p['exit'])} · PnL {p['pnl']:+.2f} USDT ({p['pnl_pct']:+.2f}%)")
+    return "\n".join(lines)
+
+def paper_trades_data(limit=30):
+    now = time.time()
     with db() as c:
-        for label, since in (("24h", now - 86400), ("7d", now - 7 * 86400)):
-            rows = c.execute("SELECT tf, side, status, COUNT(*) n FROM paper WHERE ts>=? GROUP BY tf, side, status", (since,)).fetchall()
+        opens = [dict(r) for r in c.execute("SELECT * FROM paper WHERE trade=1 AND status='OPEN' ORDER BY id DESC")]
+        closed = [dict(r) for r in c.execute("SELECT * FROM paper WHERE trade=1 AND status!='OPEN' ORDER BY closed_ts DESC, id DESC LIMIT ?", (limit,))]
+        allc = [dict(r) for r in c.execute("SELECT closed_ts, pnl FROM paper WHERE trade=1 AND status!='OPEN' AND pnl IS NOT NULL")]
+    for o in opens:
+        px = last_price(o["symbol"])
+        if px: o["price"] = px; o["unrealized"], o["unrealized_pct"] = paper_pnl(o, px)
+        else: o["price"] = o["unrealized"] = o["unrealized_pct"] = None
+    def agg(since):
+        cl = [r for r in allc if (r["closed_ts"] or 0) >= since]
+        w = sum(1 for r in cl if r["pnl"] > 0); l = sum(1 for r in cl if r["pnl"] < 0)
+        return {"trades": len(cl), "wins": w, "losses": l, "pnl": round(sum(r["pnl"] for r in cl), 2),
+                "win_rate": round(100 * w / (w + l), 1) if w + l else None}
+    s = get_settings()
+    return {"enabled": s["paper_trade"], "min_conf": s["paper_min_conf"], "size_usdt": s["paper_size_usdt"],
+            "open": opens, "closed": closed, "unrealized": round(sum(o["unrealized"] or 0 for o in opens), 2),
+            "24h": agg(now - 86400), "7d": agg(now - 7 * 86400), "all": agg(0),
+            "note": "Paper = simulated on candles (no Binance orders). PnL = price move x notional, fees/funding excluded."}
+
+def paper_text():
+    d = paper_trades_data(10)
+    lines = [f"🧪 Paper trading {'ON' if d['enabled'] else 'OFF'} · {d['min_conf']}%+ signals · ${d['size_usdt']:.0f} per signal",
+             "Simulated only — Binance par koi order nahi jata."]
+    for k, lbl in (("24h", "24h"), ("7d", "7 din"), ("all", "All")):
+        a = d[k]; wr = f"{a['win_rate']}%" if a["win_rate"] is not None else "n/a"
+        lines.append(f"{lbl}: {a['pnl']:+.2f} USDT · {a['trades']} trades · W {a['wins']} / L {a['losses']} · win {wr}")
+    lines.append(f"\nOpen ({len(d['open'])}) · unrealized {d['unrealized']:+.2f} USDT")
+    for o in d["open"][:15]:
+        u = f"{o['unrealized']:+.2f} ({o['unrealized_pct']:+.2f}%)" if o["unrealized"] is not None else "n/a"
+        lines.append(f"  {'🟢' if o['side'] == 'LONG' else '🔴'} {o['side']} {o['symbol']} [{o['tf']}] @ {fmt_price(o['symbol'], o['entry'])} · {u}")
+    if d["closed"]: lines.append("\nRecent closed:")
+    for p in d["closed"][:10]:
+        if p["pnl"] is None: continue
+        lines.append(f"  {p['status']:<7} {p['side']} {p['symbol']} [{p['tf']}] {p['pnl']:+.2f} USDT ({p['pnl_pct']:+.2f}%)")
+    lines.append("\n/paper on|off · /paper 85 (threshold) · /paper size 500")
+    return "\n".join(lines)
+
+def paper_stats(tier=None, periods=None):
+    """Signal win-rate tracker (trade=0 rows). tier=None -> standard 80%+ signals; tier='ULTRA' -> ULTRA rows only."""
+    now = time.time(); out = {}
+    tcond = "COALESCE(tier,'')='ULTRA'" if tier == "ULTRA" else "COALESCE(tier,'')!='ULTRA'"
+    with db() as c:
+        for label, since in (periods or (("24h", now - 86400), ("7d", now - 7 * 86400))):
+            rows = c.execute(f"SELECT tf, side, status, COUNT(*) n FROM paper WHERE ts>=? AND COALESCE(trade,0)=0 AND {tcond} GROUP BY tf, side, status",
+                             (since,)).fetchall()
             per = {}
             for r in rows:
                 d = per.setdefault(f"{r['tf']}|{r['side']}", {"tf": r["tf"], "side": r["side"], "TP": 0, "SL": 0, "EXPIRED": 0, "OPEN": 0})
@@ -604,6 +740,110 @@ def stats_text():
         for r in st[label]["rows"]:
             wr = f"{r['win_rate']}%" if r["win_rate"] is not None else "n/a"
             lines.append(f"  {r['tf']:>3} {r['side']:<5} win {wr:>6} (TP {r['TP']}/SL {r['SL']}, exp {r['EXPIRED']}, open {r['OPEN']})")
+    u = paper_stats("ULTRA", (("7d", time.time() - 7 * 86400), ("all", 0)))
+    for label in ("7d", "all"):
+        t = u[label]["total"]; wr = f"{t['win_rate']}%" if t["win_rate"] is not None else "n/a"
+        lines.append(f"\n⚡ ULTRA {label}: win {wr} · TP {t['TP']} · SL {t['SL']} · expired {t['EXPIRED']} · open {t['OPEN']}  (details /ultra)")
+    d = paper_trades_data(0)
+    lines.append(f"\n🧪 Paper trades ({d['min_conf']}%+, ${d['size_usdt']:.0f}/signal, {'ON' if d['enabled'] else 'OFF'}): "
+                 f"24h {d['24h']['pnl']:+.2f} USDT ({d['24h']['trades']}) · 7d {d['7d']['pnl']:+.2f} USDT ({d['7d']['trades']}) · "
+                 f"open {len(d['open'])} ({d['unrealized']:+.2f}) — details /paper")
+    return "\n".join(lines)
+
+# ---------------- ULTRA tier ----------------
+def ultra_reasons(a, tf):
+    """Empty list = qualifies as ULTRA (on top of hot: not stale / not filtered). Same filters as the backtest pool."""
+    d = 1 if a["signal"] == "LONG" else -1 if a["signal"] == "SHORT" else 0; tr = a.get("tr", {}); out = []
+    if not d or not is_hot(a): return ["not 80%+ / stale / filtered"]
+    if a.get("paused"): out.append("BTC guard")
+    if a["confidence"] < ULTRA_MIN_CONF: out.append(f"conf<{ULTRA_MIN_CONF}")
+    if not a.get("strong"): out.append("not STRONG")
+    if tr.get("1h", 0) * d < ULTRA_H1: out.append("1h trend not aligned")
+    if a.get("atr_pct", 0) < ULTRA_MIN_ATR_PCT: out.append("ATR too small vs fees")
+    if not any(i["name"] == "Volume spike" and i["vote"] * d > 0 for i in a.get("indicators", [])): out.append("no volume spike")
+    if not (ULTRA_RSI[0] < a.get("rsi", 50) < ULTRA_RSI[1]): out.append("RSI extreme")
+    return out
+
+def ultra_score(a, tf, btc1h=0.0):
+    d = 1 if a["signal"] == "LONG" else -1; tr = a.get("tr", {})
+    return round(a["confidence"] + 10 * tr.get("1h", 0) * d + 5 * tr.get("15m", 0) * d + 5 * (btc1h or 0) * d + 3
+                 + (2 if tf == "15m" else 1 if tf == "5m" else 0), 2)
+
+def ultra_day_start(now): return now - now % 86400          # UTC day
+
+def refresh_ultra_open():
+    with db() as c:
+        STATE["ultra_open"] = {(r["symbol"], r["tf"]) for r in c.execute("SELECT symbol, tf FROM paper WHERE status='OPEN' AND tier='ULTRA'")}
+
+def ultra_scan(tf, s, now=None):
+    """Once per newly CLOSED candle of tf: pick ULTRA setups (best score first), respecting the daily cap and the per-symbol
+    cooldown, store them as tier='ULTRA' paper rows (entry = close, fixed TP/SL) and return them for the alert."""
+    now = now or time.time()
+    ref = KL.get(("BTCUSDT", tf)) or next((v for k, v in KL.items() if k[1] == tf), None)
+    if not ref or len(ref) < 6: return []
+    ot = ref[5][-1]
+    if STATE["ultra_ot"].get(tf) == ot: return []            # this candle close was already evaluated
+    first = tf not in STATE["ultra_ot"]; STATE["ultra_ot"][tf] = ot
+    if first: return []                                       # no burst right after a restart
+    btc1h = (STATE.get("mood", {}).get("btc", {}).get("1h") or {}).get("trend", 0.0)
+    cands = [(ultra_score(a, tf, btc1h), sym, a) for sym, a in STATE["signals"].get(tf, {}).items() if not ultra_reasons(a, tf)]
+    if not cands: return []
+    cands.sort(key=lambda x: -x[0]); out = []
+    with db() as c:
+        today = c.execute("SELECT COUNT(*) FROM paper WHERE tier='ULTRA' AND ts>=?", (ultra_day_start(now),)).fetchone()[0]
+        for sc, sym, a in cands:
+            if today >= s["ultra_max_per_day"]: break
+            busy = c.execute("SELECT 1 FROM paper WHERE tier='ULTRA' AND symbol=? AND (status='OPEN' OR ts>=?)",
+                             (sym, now - s["ultra_cooldown_h"] * 3600)).fetchone()
+            if busy: continue
+            d = 1 if a["signal"] == "LONG" else -1; px = a["price"]; at = a["atr"]
+            tpd = max(s["ultra_tp_mult"] * at, px * 0.0025); sld = max(s["ultra_sl_mult"] * at, px * 0.0015)
+            tp, sl = px + d * tpd, px - d * sld
+            k1 = KL.get((sym, tf)); last_ot = k1[5][-2] if k1 and len(k1[5]) > 1 else now   # check from the candle after the close
+            rid = c.execute("INSERT INTO paper(ts,symbol,tf,side,confidence,entry,tp,sl,last_ot,trade,tier,score) VALUES(?,?,?,?,?,?,?,?,?,0,'ULTRA',?)",
+                            (now, sym, tf, a["signal"], a["confidence"], px, tp, sl, last_ot, sc)).lastrowid
+            today += 1
+            out.append({"id": rid, "symbol": sym, "tf": tf, "side": a["signal"], "confidence": a["confidence"], "entry": px, "tp": tp, "sl": sl,
+                        "score": sc, "n_today": today})
+    if out: refresh_ultra_open()
+    return out
+
+def ultra_alert_text(items, s):
+    lines = [f"⚡⚡ ULTRA STRONG signal{'s' if len(items) > 1 else ''} — sab se sakht filter (max {s['ultra_max_per_day']}/din). PAPER only, koi real order nahi."]
+    for u in items:
+        lines.append(f"{'🟢' if u['side'] == 'LONG' else '🔴'} {u['side']} {u['symbol']} [{u['tf']}] {u['confidence']}% · score {u['score']:.0f} · aaj #{u['n_today']}\n"
+                     f"   Entry {fmt_price(u['symbol'], u['entry'])} | TP {fmt_price(u['symbol'], u['tp'])} | SL {fmt_price(u['symbol'], u['sl'])}")
+    lines.append("Backtest: ULTRA ka bhi fees ke baad expectancy negative tha — ye guarantee nahi. /ultra")
+    return "\n".join(lines)
+
+def ultra_data(limit=30):
+    now = time.time()
+    with db() as c:
+        recent = [dict(r) for r in c.execute("SELECT * FROM paper WHERE tier='ULTRA' ORDER BY id DESC LIMIT ?", (limit,))]
+        today = c.execute("SELECT COUNT(*) FROM paper WHERE tier='ULTRA' AND ts>=?", (ultra_day_start(now),)).fetchone()[0]
+    s = get_settings()
+    st = paper_stats("ULTRA", (("24h", now - 86400), ("7d", now - 7 * 86400), ("all", 0)))
+    return {"recent": recent, "today": today, "max_per_day": s["ultra_max_per_day"], "cooldown_h": s["ultra_cooldown_h"],
+            "alerts": s["ultra_alerts"], "stats": st,
+            "rules": f"{ULTRA_MIN_CONF}%+ · STRONG 1m+5m+15m · 1h trend aligned (>= {ULTRA_H1}) · ATR >= {ULTRA_MIN_ATR_PCT}% · volume spike · "
+                     f"RSI {ULTRA_RSI[0]}-{ULTRA_RSI[1]} · closed candle · max {s['ultra_max_per_day']}/day · {s['ultra_cooldown_h']:g}h per coin",
+            "backtest": "Backtest (74 coins, Sep 5 - Nov 9 2026, fees+slippage 0.12%): ULTRA ~5/day, win ~37% at TP1.5/SL1 ATR, "
+                        "expectancy negative after fees. Not a profit guarantee."}
+
+def ultra_text():
+    d = ultra_data(15); lines = [f"⚡ ULTRA STRONG — aaj {d['today']}/{d['max_per_day']} · alerts {'ON' if d['alerts'] else 'OFF'}", "Rules: " + d["rules"]]
+    for label in ("24h", "7d", "all"):
+        t = d["stats"][label]["total"]; wr = f"{t['win_rate']}%" if t["win_rate"] is not None else "n/a"
+        lines.append(f"{label}: win {wr} · TP {t['TP']} · SL {t['SL']} · expired {t['EXPIRED']} · open {t['OPEN']}")
+    cur = [(tf, sym, a) for tf in TFS for sym, a in STATE["signals"].get(tf, {}).items() if a.get("ultra")]
+    if cur:
+        lines.append("\nOpen ULTRA:")
+        for tf, sym, a in cur[:10]: lines.append(f"  {sym} [{tf}] now {a['signal']} {a['confidence']}%")
+    if d["recent"]: lines.append("\nRecent:")
+    for p in d["recent"]:
+        lines.append(f"  {time.strftime('%m-%d %H:%M', time.gmtime(p['ts']))}Z {p['side']} {p['symbol']} [{p['tf']}] {p['confidence']}% → {p['status']}")
+    if not d["recent"]: lines.append("\nAbhi tak koi ULTRA signal nahi (din mein ~3-5 aate hain, sideways market mein kam).")
+    lines.append("\n" + d["backtest"] + "\n/ultra on|off (alerts)")
     return "\n".join(lines)
 
 async def refresh_funding():
@@ -650,7 +890,10 @@ async def post_scan(tf):
             prime_hot(); return                     # no alert burst for setups that were already hot at start
         await update_btc_guard(s)
         await record_and_alert(s)
-        update_paper()
+        ultra = ultra_scan(tf, s)
+        if ultra and s["ultra_alerts"]: await notify(ultra_alert_text(ultra, s))
+        closed = []; update_paper(closed, s); refresh_ultra_open()
+        if closed: await notify(paper_close_text(closed))
         STATE["scan"]["cycle_s"] = round(time.time() - t0, 3)
     if tf == "1m":
         async with TRADE_LOCK:
@@ -660,6 +903,10 @@ def prime_hot():
     for tf in TFS:
         for sym, a in STATE["signals"].get(tf, {}).items():
             STATE["hot_prev"][(sym, tf)] = a["signal"] if is_hot(a) else None
+    s = get_settings()
+    for tf in TFS:   # same no-burst rule for paper trades: setups already >= threshold at startup do not open trades
+        for sym, a in STATE["signals"].get(tf, {}).items():
+            STATE["paper_prev"][(sym, tf)] = a["signal"] if paper_qualifies(a, s) else None
 
 async def live_loop():
     """Every 2 s: REST price fallback when the WebSocket is silent, then recompute signals with live prices."""
@@ -1311,7 +1558,9 @@ HELP_TEXT = ("⚡ Scalping Bot — commands\n"
     "/pnl — realized / unrealized PnL: today, 7d, all time, wins/losses\n"
     "/health — data age per timeframe, WebSocket, rate limit, errors, uptime\n"
     "/alerts on|off|80|85|90|fav|all — auto alerts (default ON, 80%)\n"
-    "/stats — paper win-rate (24h / 7d, per timeframe & side)\n"
+    "/ultra [on|off] — ⚡ ULTRA STRONG: sab se sakht ~3-5 signals/din, alag paper win-rate\n"
+    "/stats — paper win-rate (24h / 7d, per timeframe & side) + ULTRA\n"
+    "/paper [on|off|85|size 500] — 🧪 auto PAPER trades: $500 per 85%+ signal (simulated, no real orders)\n"
     "/risk — risk guard: daily loss, open trades, trades/day\n"
     "/fav add|remove SYMBOL, /fav list — favorites / watchlist\n"
     "/balance — spot & futures balances\n"
@@ -1329,6 +1578,20 @@ def extra_command(cmd, args):
     s = get_settings()
     if cmd == "/help": return HELP_TEXT
     if cmd == "/stats": return stats_text()
+    if cmd == "/ultra":
+        a = (args[0].lower() if args else "")
+        if a in ("on", "off"): save_settings({"ultra_alerts": a == "on"})
+        elif a: return "Use: /ultra · /ultra on|off"
+        return ultra_text()
+    if cmd == "/paper":
+        a = [x.lower() for x in args]
+        if a and a[0] in ("on", "off"): save_settings({"paper_trade": a[0] == "on"})
+        elif a and a[0] == "size" and len(a) > 1:
+            try: save_settings({"paper_size_usdt": float(a[1].lstrip("$"))})
+            except ValueError: return "Use: /paper size 500"
+        elif a and a[0].rstrip("%").isdigit(): save_settings({"paper_min_conf": int(a[0].rstrip("%"))})
+        elif a: return "Use: /paper · /paper on|off · /paper 85 · /paper size 500"
+        return paper_text()
     if cmd == "/risk": return risk_text()
     if cmd == "/strong" or (cmd == "/signals" and args and args[0].lower() == "strong"): return strong_text()
     if cmd == "/market": return mood_text()
@@ -1385,7 +1648,7 @@ async def handle(msg):
         kb = open_btn()
         await tg("sendMessage", chat_id=cid, text=("⚡ Scalping Bot ready.\nScanning the top ~200 Binance USDT-M futures coins on 1m / 5m / 15m "
                  "with EMA 9/21/50, RSI, MACD, VWAP, Bollinger, volume and candle patterns, plus higher-timeframe confirmation.\n\n"
-                 "/signals · /strong · /market · /pnl · /health · /alerts · /stats · /risk · /fav · /balance · /auto · /status · /help\n\nAuto Trade is OFF by default. Alerts ON (80%+). "
+                 "/signals · /strong · /market · /pnl · /health · /alerts · /stats · /paper · /risk · /fav · /balance · /auto · /status · /help\n\nAuto Trade is OFF by default. Alerts ON (80%+). Paper trades ON ($500 per 85%+ signal, simulated). "
                  "Confidence = indicator agreement, not win probability.") + ("" if kb else "\n(Mini app offline; use /signals buttons.)"),
                  **({"reply_markup": kb} if kb else {}))
     elif cmd == "/signals":
@@ -1435,7 +1698,8 @@ async def bot_loop():
         {"command": "signals", "description": "80%+ signals: /signals 1m|5m|15m|strong"},
         {"command": "strong", "description": "STRONG 1m+5m+15m confluence"}, {"command": "market", "description": "Market mood + BTC guard"},
         {"command": "pnl", "description": "PnL today / 7d / all"}, {"command": "health", "description": "Data freshness & health"}, {"command": "balance", "description": "Spot & futures balances"},
-        {"command": "alerts", "description": "Alerts on|off|80|85|90|fav|all"}, {"command": "stats", "description": "Paper win-rate"},
+        {"command": "alerts", "description": "Alerts on|off|80|85|90|fav|all"}, {"command": "stats", "description": "Paper win-rate"}, {"command": "ultra", "description": "ULTRA STRONG signals (~3-5/day)"},
+        {"command": "paper", "description": "Paper trades: $500 per 85%+ signal"},
         {"command": "risk", "description": "Risk guard status"}, {"command": "fav", "description": "Favorites: add|remove|list"},
         {"command": "auto", "description": "Auto trade on|off"}, {"command": "status", "description": "Bot, scanner & key status"},
         {"command": "help", "description": "All commands"}])
@@ -1524,7 +1788,7 @@ def row(sym, a):
             "funding": round(STATE["funding"][sym] * 100, 4) if sym in STATE["funding"] else None,
             "flags": a.get("flags", []), "filtered": a.get("filtered", False), "fav": sym in FAVSET,
             "confluence": bool(a.get("strong")), "stale": bool(a.get("stale")), "age": a.get("age"), "paused": bool(a.get("paused")),
-            "price_src": a.get("price_src")}
+            "price_src": a.get("price_src"), "ultra": bool(a.get("ultra"))}
 
 async def index(request): return FileResponse(os.path.join(BASE, "static", "index.html"), headers={"Cache-Control": "no-store"})
 
@@ -1546,7 +1810,7 @@ async def api_signals(request: Request):
     return J({"tf": tf, "updated": STATE["updated"], "refresh_sec": FETCH_EVERY["1m"], "source": STATE["source"], "count": len(rows),
               "hot": sum(1 for r in rows if r["hot"]), "long": sum(1 for r in rows if r["signal"] == "LONG"),
               "short": sum(1 for r in rows if r["signal"] == "SHORT"), "strong": sum(1 for r in rows if r["confluence"] and not r["filtered"]),
-              "stale": sum(1 for r in rows if r["stale"]), "mood": STATE.get("mood"), "live_src": STATE["live_src"], "signals": rows})
+              "stale": sum(1 for r in rows if r["stale"]), "ultra": sum(1 for r in rows if r["ultra"]), "mood": STATE.get("mood"), "live_src": STATE["live_src"], "signals": rows})
 
 async def api_signal(request: Request):
     auth(request); tf = request.query_params.get("tf", "5m"); sym = request.query_params.get("symbol", "")
@@ -1590,8 +1854,14 @@ async def api_trade(request: Request):
 async def api_stats(request: Request):
     auth(request)
     with db() as c:
-        recent = [dict(r) for r in c.execute("SELECT * FROM paper ORDER BY id DESC LIMIT 60")]
-    return J({"stats": paper_stats(), "recent": recent, "risk": risk_status()})
+        recent = [dict(r) for r in c.execute("SELECT * FROM paper WHERE COALESCE(trade,0)=0 AND COALESCE(tier,'')!='ULTRA' ORDER BY id DESC LIMIT 60")]
+    return J({"stats": paper_stats(), "recent": recent, "risk": risk_status(), "paper_trades": paper_trades_data(), "ultra": ultra_data()})
+
+async def api_ultra(request: Request):
+    auth(request); return J(ultra_data(60))
+
+async def api_paper(request: Request):
+    auth(request); return J(paper_trades_data(60))
 
 async def api_fav(request: Request):
     auth(request); body = await request.json()
@@ -1613,6 +1883,6 @@ app = Starlette(routes=[
     Route("/", index), Route("/healthz", health), Route("/api/signals", api_signals), Route("/api/signal", api_signal),
     Route("/api/history", api_history), Route("/api/settings", api_settings, methods=["GET", "POST"]),
     Route("/api/trade", api_trade, methods=["POST"]), Route("/api/stats", api_stats), Route("/api/fav", api_fav, methods=["POST"]),
-    Route("/api/pnl", api_pnl), Route("/api/health", api_health),
+    Route("/api/pnl", api_pnl), Route("/api/health", api_health), Route("/api/paper", api_paper), Route("/api/ultra", api_ultra),
     Mount("/static", StaticFiles(directory=os.path.join(BASE, "static")), name="static"),
 ], lifespan=lifespan, exception_handlers={HTTPException: http_error})

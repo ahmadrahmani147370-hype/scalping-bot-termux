@@ -7,3 +7,7 @@ run/
 webapp_url.txt
 screenshot.png
 __pycache__/
+
+# backtest data
+/workspace/bt/
+bt_data/

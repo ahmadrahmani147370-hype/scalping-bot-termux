@@ -71,6 +71,8 @@ Naye version mein `websockets` package bhi install hota hai (pure Python, compil
 | `/alerts 80` · `/alerts 85` · `/alerts 90` | Alert threshold |
 | `/alerts fav` · `/alerts all` | Sirf favorites ke alerts / sab coins |
 | `/stats` | Paper win-rate (24h / 7d, har TF aur LONG/SHORT) — ye paper results hain, real trades nahi |
+| `/ultra` · `/ultra on\|off` | ⚡ ULTRA STRONG: sab se sakht filter, din mein max 5 signals, alag paper win-rate. Backtest mein bhi fees ke baad nuqsan — guarantee nahi |
+| `/paper` · `/paper on` · `/paper off` · `/paper 85` · `/paper size 500` | 🧪 Paper trades: open aur band hue trades, PnL USDT aur %, threshold aur size badlein |
 | `/risk` | Risk guard: daily loss limit, open trades, trades per day |
 | `/fav add SOL` · `/fav remove SOL` · `/fav list` | Favorites (mini app mein ☆ star bhi) |
 | `/balance` | Spot aur futures balance |
@@ -92,3 +94,14 @@ Naye version mein `websockets` package bhi install hota hai (pure Python, compil
 - **Health monitor**: scanner, WebSocket, Telegram poller, database par nazar. Koi part ruk jaye to bot khud restart karta hai, aur Telegram par ek dafa alert + theek hone par "Recovered" message bhejta hai (30 min cooldown). Mini app ka Health tab aur `/health`.
 
 Signals sirf indicators hain — confidence ka matlab jeetne ka chance nahi. Pehle chhoti amount se test karein.
+
+## 9. Paper trading (asal paise nahi)
+- Bot khud **paper (naqli) trade** kholta hai jab kisi coin ka signal **85% ya us se upar** ho jaye. Har signal par **$500** ka paper position.
+- **Binance par koi order nahi jata.** Asal Auto Trade alag hai aur OFF hi rehta hai.
+- Wohi filters jo alerts mein hain: purana (stale) data nahi, ⚠ funding / kam volume wale coin nahi, BTC guard pause wali side nahi.
+  Bot start hote hi purane 85% signals par trade nahi khulta, sirf naye signals par.
+- Ek coin + ek timeframe par ek waqt mein sirf ek paper trade. TP/SL wohi ATR wale, breakeven/trailing bhi.
+  Agar ek hi candle mein TP aur SL dono lagein to SL gina jata hai. 60 candles ke baad trade expire.
+- Trade khulne aur band hone par Telegram message aata hai, PnL USDT aur % ke saath (fees shamil nahi).
+- `/paper` se open aur band trades dekhein. Mini App mein **Stats** tab par "Paper trades", aur **Settings** mein on/off, % aur size.
+
